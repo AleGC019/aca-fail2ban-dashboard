@@ -21,4 +21,6 @@ EXPOSE 8000
 
 # Nota: El servicio fail2ban no se inicia aquí dentro del contenedor, solo necesitamos el cliente.
 # El CMD sigue siendo para uvicorn.
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# ... (resto de tu Dockerfile: FROM, WORKDIR, RUN apt-get, COPY, RUN pip, EXPOSE) ...
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
