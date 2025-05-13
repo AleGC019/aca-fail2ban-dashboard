@@ -1,264 +1,293 @@
-# api/controllers/logs.py
+# controllers/logs.py
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException
 from httpx import AsyncClient, RequestError, HTTPStatusError
-
-# --- CORRECCIÓN DE IMPORTACIÓN ---
-# Originalmente tenías:
-# from configuration.settings import settings # <<< INCORRECTO, 'settings' no es un objeto exportado
-# Lo cambiamos para importar directamente la variable que necesitas:
-from configuration.settings import LOKI_QUERY_URL  # <<< CORRECTO
-# --- FIN DE CORRECCIÓN DE IMPORTACIÓN ---
-
-from data.models import LogEntry  # Para el endpoint simple /fail2ban-logs
-from services.loki import query_loki as service_query_loki  # Para el endpoint simple /fail2ban-logs
-from typing import List, Optional
+# --- CAMBIO AQUÍ ---
+# Se importa LOKI_QUERY_URL directamente, no 'settings'
+from configuration.settings import LOKI_QUERY_URL
+# -------------------
 import asyncio
 import time
 import re
+from typing import List, Optional # Añadido Optional para claridad si se usa
+
+# Importaciones necesarias que podrían faltar según el contexto completo
+# Asegúrate de que estas u otras dependencias necesarias estén aquí si las usas en otras partes del archivo
+# from data.models import LogEntry # Necesario si devuelves este modelo en alguna ruta de este archivo
+# from services.loki import query_loki # Necesario si llamas a esta función aquí
 
 router = APIRouter()
 
+# --- INICIO: Código de la versión más completa de controllers/logs.py ---
 
-# Endpoint de Health Check (ya estaba bien)
-@router.get("/health")
-async def health():
-    return {"status": "ok", "message": "API de Logs y Gestión de Fail2ban funcionando"}
-
-
-# Endpoint original para /fail2ban-logs (este usaba un servicio que ya importaba bien LOKI_QUERY_URL)
-# Lo renombro ligeramente para evitar confusión si quieres mantener ambos endpoints de logs por ahora.
-@router.get("/fail2ban-logs-simple", response_model=List[LogEntry])
-async def get_fail2ban_logs_original(
-        start: Optional[str] = Query(None,
-                                     description="RFC3339 o timestamp UNIX (ns) para el inicio del rango de tiempo."),
-        end: Optional[str] = Query(None, description="RFC3339 o timestamp UNIX (ns) para el fin del rango de tiempo."),
-        limit: int = Query(100, ge=1, le=1000, description="Número máximo de entradas de log a devolver."),
-):
-    # El servicio 'service_query_loki' ya maneja la lógica y la importación de LOKI_QUERY_URL correctamente.
-    return await service_query_loki(start, end, limit)
-
-
-# WebSocket para recibir logs de fail2ban en tiempo real
+# web socket para recibir logs de fail2ban en tiempo real
 @router.websocket("/ws/fail2ban-logs")
 async def websocket_fail2ban_logs(websocket: WebSocket):
     await websocket.accept()
-    last_timestamp_ns_str = None  # Guardar el último timestamp como string (como viene de Loki)
+    last_timestamp = None
 
     try:
         while True:
             params = {
                 "query": '{job="fail2ban"}',
-                "limit": 50,  # Traer un lote razonable
-                "direction": "forward"  # Traer los más viejos primero para procesar en orden
+                "limit": 100,
             }
 
-            if last_timestamp_ns_str:
-                # Sumar 1 nanosegundo para evitar traer el mismo log otra vez
-                params["start"] = str(int(last_timestamp_ns_str) + 1)
-            else:
-                # Para la primera carga, traer logs de, por ejemplo, los últimos 5 minutos
-                params["start"] = str(int(time.time() - 300) * 1_000_000_000)
+            if last_timestamp:
+                params["start"] = str(int(last_timestamp) + 1) # Suma 1 nanosegundo para evitar duplicados
 
             async with AsyncClient() as client:
                 try:
-                    # --- CORRECCIÓN DE USO ---
-                    # Usar la variable LOKI_QUERY_URL importada directamente
-                    response = await client.get(LOKI_QUERY_URL, params=params, timeout=10.0)  # <<< USO CORREGIDO
-                    # --- FIN DE CORRECCIÓN DE USO ---
+                    # --- CAMBIO AQUÍ ---
+                    # Usa LOKI_QUERY_URL directamente
+                    response = await client.get(LOKI_QUERY_URL, params=params, timeout=10.0)
+                    # -------------------
                     response.raise_for_status()
                 except (RequestError, HTTPStatusError) as exc:
-                    await websocket.send_json({"error": f"Error al contactar Loki: {str(exc)}"})
+                    try:
+                        await websocket.send_json({"error": f"Error al contactar Loki: {str(exc)}"})
+                    except WebSocketDisconnect: # Manejar desconexión si ocurre al enviar error
+                        break
+                    except Exception as send_exc: # Manejar otros errores de envío
+                        print(f"Error al enviar mensaje de error por websocket: {send_exc}")
+                        break # Salir si no se puede enviar
                     await asyncio.sleep(5)
-                    continue
+                    continue # Reintentar la conexión a Loki
 
             data = response.json().get("data", {})
             results = data.get("result", [])
 
-            new_logs_found_in_batch = False
-            if results:
-                all_values_from_batch = []
-                for stream in results:
-                    # Podrías querer enviar las etiquetas del stream también
-                    # stream_labels = stream.get("stream", {}) 
-                    for ts, line in stream.get("values", []):
-                        all_values_from_batch.append({"timestamp": ts, "message": line})  # "labels": stream_labels
+            new_entries = []
+            for stream in results:
+                labels = stream.get("stream", {})
+                service = labels.get("job", "desconocido")
+                level = labels.get("level", "info") # Asumiendo que 'level' puede estar en las etiquetas de Loki
 
-                # Ordenar por timestamp (ya que 'direction: forward' los trae ordenados por stream, pero aquí los mezclamos)
-                all_values_from_batch.sort(key=lambda x: int(x["timestamp"]))
+                # Ordenar valores por timestamp (ya suelen venir ordenados, pero por seguridad)
+                values = sorted(stream.get("values", []), key=lambda x: int(x[0]))
 
-                for log_data in all_values_from_batch:
-                    await websocket.send_json(log_data)
-                    last_timestamp_ns_str = log_data["timestamp"]  # Actualizar con el último timestamp enviado
-                    new_logs_found_in_batch = True
+                for ts, line in values:
+                    # Actualizar last_timestamp con el timestamp MÁS RECIENTE procesado
+                    if last_timestamp is None or int(ts) > int(last_timestamp):
+                       last_timestamp = ts
 
-            # Ajustar el tiempo de espera
-            if new_logs_found_in_batch:
-                await asyncio.sleep(1)  # Hay actividad, revisa pronto
-            else:
-                await asyncio.sleep(5)  # No hay nuevos logs, espera un poco más
+                    message_data = {
+                        "timestamp": ts,
+                        "service": service,
+                        "message": line,
+                        "level": level,
+                    }
+                    new_entries.append((int(ts), message_data)) # Guardar con timestamp numérico para ordenar
+
+            # Ordenar todas las entradas nuevas de todos los streams por timestamp
+            new_entries.sort(key=lambda x: x[0])
+
+            # Enviar entradas ordenadas
+            for _, message_data in new_entries:
+                 try:
+                     await websocket.send_json(message_data)
+                 except WebSocketDisconnect:
+                     print("Cliente desconectado mientras se enviaban mensajes.")
+                     return # Salir de la función si el cliente se desconecta
+                 except Exception as send_exc:
+                     print(f"Error al enviar mensaje por websocket: {send_exc}")
+                     # Considerar si continuar o detenerse ante errores de envío
+
+            # Esperar antes de la siguiente consulta
+            await asyncio.sleep(5)
 
     except WebSocketDisconnect:
-        print(f"Cliente WebSocket {websocket.client} desconectado")
+        print("Cliente desconectado.")
     except Exception as e:
-        error_message = f"Error inesperado en WebSocket: {str(e)}"
-        print(error_message)
+        print(f"Error inesperado en el websocket: {str(e)}")
+        # Intentar enviar un mensaje de error final si la conexión aún está activa
         try:
-            await websocket.send_json({"error": error_message})
-        except Exception:
-            pass  # Si el socket ya está cerrado, no se puede enviar el error
-        # Uvicorn suele manejar el cierre del websocket en excepciones no controladas
-        # await websocket.close()
+            await websocket.send_json({"error": f"Error inesperado del servidor: {str(e)}"})
+        except Exception as final_send_exc:
+             print(f"No se pudo enviar el mensaje de error final: {final_send_exc}")
+        finally:
+             # Asegurarse de cerrar el websocket en caso de error inesperado no manejado
+             # await websocket.close() # Comentado porque uvicorn/fastapi suelen manejarlo
+             pass
 
 
-# Ruta para obtener las IPs baneadas (ejemplo, podrías necesitar Pydantic models para la respuesta)
-@router.get("/fail2ban/banned-ips", response_model=List[dict])  # Usar un Pydantic model aquí es mejor
+# Ruta pa obtener las ips baneadas (ejemplo basado en logs, NO en estado real de fail2ban-client)
+@router.get("/fail2ban/banned-ips")
 async def get_banned_ips(
-        page: int = Query(0, ge=0, description="Número de página (inicia en 0)."),
-        size: int = Query(10, ge=1, le=100, description="Tamaño de página."),
+    page: int = Query(0, ge=0, description="Número de página."),
+    size: int = Query(10, ge=1, le=100, description="Tamaño de página."),
 ):
-    # Consulta por logs que contengan "Ban" en el mensaje en la última hora
-    start_time_ns = int(time.time() - 3600) * 1_000_000_000  # Última hora en nanosegundos
+    # Busca logs que contengan "Ban" en la última hora (ajusta según necesidad)
+    # ¡IMPORTANTE!: Esto NO garantiza que la IP siga baneada. Solo muestra IPs que FUERON baneadas.
+    # Para el estado actual, necesitarías usar `fail2ban-client status <jail>` y parsear la salida.
+    start_time_sec = int(time.time()) - 3600 # Última hora
+    start_ns = start_time_sec * 1_000_000_000 # Convertir a nanosegundos
 
     params = {
-        "query": '{job="fail2ban"} |= "Ban"',
-        "start": str(start_time_ns),
-        "limit": 500,  # Trae un buen número para poder parsear y paginar
-        "direction": "forward"
+        "query": '{job="fail2ban"} |= "Ban"', # Busca la palabra "Ban"
+        "start": str(start_ns),
+        "limit": 1000, # Obtener un límite mayor para tener suficientes datos para paginar
+                       # Idealmente, Loki soporta paginación, pero aquí simulamos post-filtrado
+        "direction": "forward", # Obtener logs desde el más antiguo al más reciente
     }
-
-    parsed_ban_entries = []
 
     async with AsyncClient() as client:
         try:
-            # --- CORRECCIÓN DE USO ---
-            response = await client.get(LOKI_QUERY_URL, params=params, timeout=10.0)  # <<< USO CORREGIDO
-            # --- FIN DE CORRECCIÓN DE USO ---
+            # --- CAMBIO AQUÍ ---
+            response = await client.get(LOKI_QUERY_URL, params=params, timeout=10.0)
+            # -------------------
             response.raise_for_status()
         except (RequestError, HTTPStatusError) as exc:
             raise HTTPException(status_code=503, detail=f"Error al contactar Loki: {str(exc)}")
 
     results = response.json().get("data", {}).get("result", [])
+    entries = []
+    banned_ips = set() # Para evitar duplicados si una IP es baneada múltiples veces en el rango
 
-    raw_log_lines_with_ban = []
+    # Procesar resultados en orden cronológico
+    all_values = []
     for stream in results:
         labels = stream.get("stream", {})
+        jail = labels.get("jail", "desconocido") # Asumiendo que promtail añade la etiqueta 'jail'
         for ts, line in stream.get("values", []):
-            raw_log_lines_with_ban.append({"ts": ts, "line": line, "labels": labels})
+             all_values.append({'ts': ts, 'line': line, 'jail': jail})
 
-    raw_log_lines_with_ban.sort(key=lambda x: int(x["ts"]))  # Ordenar por timestamp
+    # Ordenar todos los logs por timestamp
+    all_values.sort(key=lambda x: int(x['ts']))
 
-    # Extraer IPs y detalles, evitando duplicados si es necesario (mostrando el ban más reciente por IP)
-    # Para esta demo, simplemente listaremos los eventos de ban encontrados.
-    for entry in raw_log_lines_with_ban:
-        match = re.search(r"Ban\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", entry["line"])
+    for log_entry in all_values:
+        line = log_entry['line']
+        # Expresión regular más robusta para capturar IP en logs de ban
+        match = re.search(r"(?:Ban|already banned)\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", line)
         if match:
             ip = match.group(1)
-            # Asumimos que la etiqueta 'component' de Promtail podría ser el jail.
-            # Necesitarías verificar si esta etiqueta es la correcta o si necesitas parsear el jail del log.
-            jail_from_labels = entry["labels"].get("component", "desconocido")
+            # Solo añadir si no se ha añadido ya para este periodo de logs
+            if ip not in banned_ips:
+                jail = log_entry['jail']
+                ban_time_ns = log_entry['ts'] # Timestamp en nanosegundos string
+                # Opcional: buscar intentos fallidos si están en el mensaje (esto es muy dependiente del formato del log)
+                attempts_match = re.search(r"\((\d+)\s+failures\)", line) # Ejemplo: "(3 failures)"
+                failed_attempts = int(attempts_match.group(1)) if attempts_match else None
 
-            parsed_ban_entries.append({
-                "ip": ip,
-                "jail": jail_from_labels,
-                "ban_time": entry["ts"],
-                "log_line_preview": entry["line"][:100]  # Muestra un preview del log
+                entries.append({
+                    "ip": ip,
+                    "jail": jail,
+                    "ban_time": ban_time_ns,
+                    "failed_attempts": failed_attempts, # Puede ser None
+                    "raw_log": line # Incluir el log original puede ser útil
+                })
+                banned_ips.add(ip) # Marcar como añadida
+
+    # Aplicar paginación a la lista recolectada y ordenada
+    start_idx = page * size
+    end_idx = start_idx + size
+    # Devolver solo la página solicitada
+    return entries[start_idx:end_idx]
+
+
+# Ruta para obtener logs filtrados (similar a la función query_loki pero con más filtros)
+@router.get("/fail2ban/logs")
+async def get_filtered_logs(
+    page: int = Query(0, ge=0),
+    size: int = Query(10, ge=1, le=100),
+    start: Optional[int] = Query(None, description="Inicio del rango de tiempo (timestamp UNIX en segundos)."),
+    end: Optional[int] = Query(None, description="Fin del rango de tiempo (timestamp UNIX en segundos)."),
+    # 'service' aquí se refiere a la etiqueta 'job' de Loki/Promtail
+    service: Optional[str] = Query(None, description="Filtrar por etiqueta 'job' (e.g., 'fail2ban')."),
+    level: Optional[str] = Query(None, description="Filtrar por nivel de log (buscar texto en el mensaje)."),
+    filter_text: Optional[str] = Query(None, description="Texto libre a buscar en el mensaje del log."),
+):
+    # Construir la query de LogQL
+    query_parts = ['{job="fail2ban"}'] # Base query obligatoria
+    if service:
+        # Sobrescribe si se especifica, aunque ya filtramos por job="fail2ban"
+        # Podría ser útil si tuvieras logs de diferentes jails bajo el mismo job pero con otra etiqueta
+        query_parts[0] = f'{{job="{service}"}}' # O añadir como {job="fail2ban", service_label="algo"} si tienes más etiquetas
+    if level:
+        # Filtrado de línea por nivel (sensible a mayúsculas/minúsculas por defecto en LogQL)
+        query_parts.append(f'|= `{level}`') # Usar backticks para buscar la cadena exacta
+    if filter_text:
+        # Filtrado de línea por texto libre
+        query_parts.append(f'|= `{filter_text}`')
+
+    logql_query = " ".join(query_parts)
+
+    params = {
+        "query": logql_query,
+        "limit": 1000, # Obtener más para paginar después
+        "direction": "backward", # Logs más recientes primero por defecto
+    }
+    if start:
+        # Convertir de segundos UNIX a nanosegundos
+        params["start"] = str(start * 1_000_000_000)
+    if end:
+        # Convertir de segundos UNIX a nanosegundos
+        params["end"] = str(end * 1_000_000_000)
+
+    async with AsyncClient() as client:
+        try:
+             # --- CAMBIO AQUÍ ---
+            response = await client.get(LOKI_QUERY_URL, params=params, timeout=10.0)
+             # -------------------
+            response.raise_for_status()
+        except (RequestError, HTTPStatusError) as exc:
+            raise HTTPException(status_code=503, detail=f"Error al contactar Loki: {str(exc)}")
+
+    results = response.json().get("data", {}).get("result", [])
+    entries = []
+
+    # Recolectar todos los valores de todos los streams
+    all_values = []
+    for stream in results:
+        labels = stream.get("stream", {})
+        service_name = labels.get("job", "desconocido")
+        # Intentar extraer nivel de log (puede no estar como etiqueta)
+        level_value = labels.get("level", "info") # O parsearlo del mensaje si es necesario
+
+        for ts, line in stream.get("values", []):
+            all_values.append({
+                "timestamp": ts, # Mantener como string de nanosegundos
+                "service": service_name,
+                "message": line,
+                "level": level_value # Puede ser 'info' por defecto si no hay etiqueta 'level'
             })
+
+    # Ordenar por timestamp (descendente, ya que pedimos 'backward')
+    # Loki debería devolverlos ordenados, pero re-ordenamos por si acaso
+    all_values.sort(key=lambda x: int(x['timestamp']), reverse=True)
 
     # Aplicar paginación
     start_idx = page * size
     end_idx = start_idx + size
-    return parsed_ban_entries[start_idx:end_idx]
+    return all_values[start_idx:end_idx]
 
+# --- FIN: Código de la versión más completa de controllers/logs.py ---
 
-# Ruta para obtener logs filtrados con paginación (ejemplo mejorado)
-@router.get("/fail2ban/logs", response_model=List[dict])  # Usar un Pydantic model es mejor
-async def get_filtered_logs(
-        page: int = Query(0, ge=0, description="Número de página (inicia en 0)."),
-        size: int = Query(10, ge=1, le=100, description="Número de logs por página."),
-        start_time_ns: Optional[int] = Query(None,
-                                             description="Inicio del rango de tiempo (timestamp UNIX en nanosegundos)."),
-        end_time_ns: Optional[int] = Query(None,
-                                           description="Fin del rango de tiempo (timestamp UNIX en nanosegundos)."),
-        component: Optional[str] = Query(None,
-                                         description="Filtrar por la etiqueta 'component' (ej. 'sshd', 'server')."),
-        level: Optional[str] = Query(None,
-                                     description="Filtrar por la etiqueta 'level' (ej. 'notice', 'info', 'error')."),
-        text_filter: Optional[str] = Query(None,
-                                           description="Texto a buscar en el mensaje del log (filtrado de línea)."),
-):
-    logql_parts = ['{job="fail2ban"}']  # Base de la consulta
+# Mantén la ruta /health y /fail2ban-logs si también las necesitas
+# Si las rutas anteriores reemplazan la funcionalidad de /fail2ban-logs, puedes eliminarla.
 
-    if component:
-        logql_parts.append(f', component="{component}"')
-    if level:
-        logql_parts.append(f', level="{level}"')
+# Ejemplo de cómo podría quedar si mantienes las rutas de la SEGUNDA versión que proporcionaste:
+# Necesitarías importar LogEntry y query_loki si usas estas.
+# from data.models import LogEntry
+# from services.loki import query_loki
 
-    query = "".join(logql_parts)
+@router.get("/health")
+async def health():
+    return {"status": "ok", "message": "API de Logs y Gestión de Fail2ban funcionando"}
 
-    if text_filter:  # Filtro de línea se añade después de los selectores de stream
-        escaped_text_filter = text_filter.replace('"', '\\"')  # Escapar comillas dobles para LogQL
-        query += f' |= "{escaped_text_filter}"'
-
-    params = {
-        "query": query,
-        "limit": size,  # Traer solo los logs para la página actual
-        "direction": "backward"  # Traer los más recientes primero
-    }
-
-    # Para paginación con 'start' y 'offset' en Loki, se necesita un enfoque diferente
-    # Loki no tiene un 'offset' directo como SQL. La paginación se maneja típicamente
-    # trayendo N*page_size logs y luego cortando en el cliente, o usando el timestamp
-    # del último log visto en la página anterior como 'end' para la siguiente página (si 'direction' es forward)
-    # o como 'start' para la página anterior (si 'direction' es backward).
-
-    # Para esta implementación, si 'page' > 0, ajustaremos 'end' para simular un offset
-    # Esto es una simplificación y puede no ser perfectamente preciso o eficiente para grandes datasets.
-    # Se requeriría una estrategia más robusta para paginación real en producción.
-    # Por ahora, si page > 0, no podemos usar 'limit' y 'start' de forma simple para paginar sin más lógica.
-
-    # Simplificaremos: traeremos una cantidad mayor y paginaremos en Python
-    # Traeremos suficientes para cubrir hasta la página actual y un poco más para ver si hay más.
-    # OJO: Esto puede ser ineficiente para muchas páginas.
-    effective_limit = (page + 1) * size + 1  # Trae un extra para saber si hay más páginas
-
-    if start_time_ns:
-        params["start"] = str(start_time_ns)
-    if end_time_ns:
-        params["end"] = str(end_time_ns)
-
-    params["limit"] = effective_limit  # Sobrescribir el límite para traer suficientes datos
-
-    all_fetched_entries = []
-    async with AsyncClient() as client:
-        try:
-            # --- CORRECCIÓN DE USO ---
-            response = await client.get(LOKI_QUERY_URL, params=params, timeout=10.0)  # <<< USO CORREGIDO
-            # --- FIN DE CORRECCIÓN DE USO ---
-            response.raise_for_status()
-        except (RequestError, HTTPStatusError) as exc:
-            raise HTTPException(status_code=503, detail=f"Error al contactar Loki: {str(exc)}")
-
-    results = response.json().get("data", {}).get("result", [])
-
-    for stream in results:
-        stream_labels = stream.get("stream", {})
-        for ts, line_content in stream.get("values", []):
-            all_fetched_entries.append({
-                "timestamp": ts,
-                "message": line_content,
-                "labels": stream_labels  # Incluir todas las etiquetas del stream
-            })
-
-    # Los logs vienen ordenados por Loki (más recientes primero debido a direction="backward")
-
-    # Aplicar el corte para la paginación
-    start_index_for_page = page * size
-    end_index_for_page = start_index_for_page + size
-
-    paginated_entries = all_fetched_entries[start_index_for_page:end_index_for_page]
-
-    # Podrías añadir información sobre si hay más páginas
-    # has_more_pages = len(all_fetched_entries) > end_index_for_page
-
-    return paginated_entries
+# Esta ruta es más simple que /fail2ban/logs, decide si mantener ambas
+# @router.get("/fail2ban-logs", response_model=List[LogEntry]) # Necesitarías importar List y LogEntry
+# async def get_fail2ban_logs_simple(
+#     start: Optional[str] = Query(None), # Timestamps como strings (formato RFC3339 o Unix epoch ns)
+#     end: Optional[str] = Query(None),
+#     limit: int = Query(100, ge=1, le=1000),
+# ):
+#     # Asumiendo que tienes una función query_loki en services.loki
+#     # from services.loki import query_loki
+#     try:
+#         return await query_loki(start, end, limit) # query_loki debe manejar la llamada a LOKI_QUERY_URL
+#     except HTTPException as e:
+#         raise e # Re-lanzar excepciones HTTP generadas por query_loki
+#     except Exception as e:
+#         # Capturar otros posibles errores
+#         raise HTTPException(status_code=500, detail=f"Error interno al obtener logs: {str(e)}")
