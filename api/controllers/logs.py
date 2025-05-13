@@ -10,6 +10,7 @@ import asyncio
 import time
 import re
 from typing import List, Optional # Añadido Optional para claridad si se usa
+from datetime import datetime
 
 # Importaciones necesarias que podrían faltar según el contexto completo
 # Asegúrate de que estas u otras dependencias necesarias estén aquí si las usas en otras partes del archivo
@@ -112,76 +113,139 @@ async def websocket_fail2ban_logs(websocket: WebSocket):
 
 
 # Ruta pa obtener las ips baneadas (ejemplo basado en logs, NO en estado real de fail2ban-client)
+#@router.get("/fail2ban/banned-ips")
+#async def get_banned_ips(
+#    page: int = Query(0, ge=0, description="Número de página."),
+#    size: int = Query(10, ge=1, le=100, description="Tamaño de página."),
+#):
+#    # Busca logs que contengan "Ban" en la última hora (ajusta según necesidad)
+#    # ¡IMPORTANTE!: Esto NO garantiza que la IP siga baneada. Solo muestra IPs que FUERON baneadas.
+#    # Para el estado actual, necesitarías usar `fail2ban-client status <jail>` y parsear la salida.
+#    start_time_sec = int(time.time()) - 3600 # Última hora
+#    start_ns = start_time_sec * 1_000_000_000 # Convertir a nanosegundos
+#
+#    params = {
+#        "query": '{job="fail2ban"} |= "Ban"', # Busca la palabra "Ban"
+#        "start": str(start_ns),
+#        "limit": 1000, # Obtener un límite mayor para tener suficientes datos para paginar
+#                       # Idealmente, Loki soporta paginación, pero aquí simulamos post-filtrado
+#        "direction": "forward", # Obtener logs desde el más antiguo al más reciente
+#    }
+#
+#    async with AsyncClient() as client:
+#        try:
+#            # --- CAMBIO AQUÍ ---
+#            response = await client.get(LOKI_QUERY_URL, params=params, timeout=10.0)
+#            # -------------------
+#            response.raise_for_status()
+#        except (RequestError, HTTPStatusError) as exc:
+#            raise HTTPException(status_code=503, detail=f"Error al contactar Loki: {str(exc)}")
+#
+#    results = response.json().get("data", {}).get("result", [])
+#    entries = []
+#    banned_ips = set() # Para evitar duplicados si una IP es baneada múltiples veces en el rango
+#
+#    # Procesar resultados en orden cronológico
+#    all_values = []
+#    for stream in results:
+#        labels = stream.get("stream", {})
+#        jail = labels.get("jail", "desconocido") # Asumiendo que promtail añade la etiqueta 'jail'
+#        for ts, line in stream.get("values", []):
+#             all_values.append({'ts': ts, 'line': line, 'jail': jail})
+#
+#    # Ordenar todos los logs por timestamp
+#    all_values.sort(key=lambda x: int(x['ts']))
+#
+#    for log_entry in all_values:
+#        line = log_entry['line']
+#        # Expresión regular más robusta para capturar IP en logs de ban
+#        match = re.search(r"(?:Ban|already banned)\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", line)
+#        if match:
+#            ip = match.group(1)
+#            # Solo añadir si no se ha añadido ya para este periodo de logs
+#            if ip not in banned_ips:
+#                jail = log_entry['jail']
+#                ban_time_ns = log_entry['ts'] # Timestamp en nanosegundos string
+#                # Opcional: buscar intentos fallidos si están en el mensaje (esto es muy dependiente del formato del log)
+#                attempts_match = re.search(r"\((\d+)\s+failures\)", line) # Ejemplo: "(3 failures)"
+#                failed_attempts = int(attempts_match.group(1)) if attempts_match else None
+#
+#                entries.append({
+#                    "ip": ip,
+#                    "jail": jail,
+#                    "ban_time": ban_time_ns,
+#                    "failed_attempts": failed_attempts, # Puede ser None
+#                    "raw_log": line # Incluir el log original puede ser útil
+#                })
+#                banned_ips.add(ip) # Marcar como añadida
+#
+#    # Aplicar paginación a la lista recolectada y ordenada
+#    start_idx = page * size
+#    end_idx = start_idx + size
+#    # Devolver solo la página solicitada
+#    return entries[start_idx:end_idx]
 @router.get("/fail2ban/banned-ips")
 async def get_banned_ips(
     page: int = Query(0, ge=0, description="Número de página."),
     size: int = Query(10, ge=1, le=100, description="Tamaño de página."),
 ):
-    # Busca logs que contengan "Ban" en la última hora (ajusta según necesidad)
-    # ¡IMPORTANTE!: Esto NO garantiza que la IP siga baneada. Solo muestra IPs que FUERON baneadas.
-    # Para el estado actual, necesitarías usar `fail2ban-client status <jail>` y parsear la salida.
-    start_time_sec = int(time.time()) - 3600 # Última hora
-    start_ns = start_time_sec * 1_000_000_000 # Convertir a nanosegundos
+    start_time_sec = int(time.time()) - 3600  # Última hora
+    start_ns = start_time_sec * 1_000_000_000
 
     params = {
-        "query": '{job="fail2ban"} |= "Ban"', # Busca la palabra "Ban"
+        "query": '{job="fail2ban"} |= "Ban"',
         "start": str(start_ns),
-        "limit": 1000, # Obtener un límite mayor para tener suficientes datos para paginar
-                       # Idealmente, Loki soporta paginación, pero aquí simulamos post-filtrado
-        "direction": "forward", # Obtener logs desde el más antiguo al más reciente
+        "limit": 1000,
+        "direction": "backward",  # <- más reciente primero
     }
 
     async with AsyncClient() as client:
         try:
-            # --- CAMBIO AQUÍ ---
             response = await client.get(LOKI_QUERY_URL, params=params, timeout=10.0)
-            # -------------------
             response.raise_for_status()
         except (RequestError, HTTPStatusError) as exc:
             raise HTTPException(status_code=503, detail=f"Error al contactar Loki: {str(exc)}")
 
     results = response.json().get("data", {}).get("result", [])
     entries = []
-    banned_ips = set() # Para evitar duplicados si una IP es baneada múltiples veces en el rango
+    banned_ips = set()
 
-    # Procesar resultados en orden cronológico
     all_values = []
     for stream in results:
         labels = stream.get("stream", {})
-        jail = labels.get("jail", "desconocido") # Asumiendo que promtail añade la etiqueta 'jail'
+        jail = labels.get("jail", "desconocido")
         for ts, line in stream.get("values", []):
-             all_values.append({'ts': ts, 'line': line, 'jail': jail})
+            all_values.append({'ts': ts, 'line': line, 'jail': jail})
 
-    # Ordenar todos los logs por timestamp
-    all_values.sort(key=lambda x: int(x['ts']))
+    # Ordenar del más reciente al más antiguo
+    all_values.sort(key=lambda x: int(x['ts']), reverse=True)
 
     for log_entry in all_values:
         line = log_entry['line']
-        # Expresión regular más robusta para capturar IP en logs de ban
-        match = re.search(r"(?:Ban|already banned)\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", line)
+        match = re.search(r"(?:Ban|already banned)\s+(\d{1,3}(?:\.\d{1,3}){3})", line)
         if match:
             ip = match.group(1)
-            # Solo añadir si no se ha añadido ya para este periodo de logs
             if ip not in banned_ips:
                 jail = log_entry['jail']
-                ban_time_ns = log_entry['ts'] # Timestamp en nanosegundos string
-                # Opcional: buscar intentos fallidos si están en el mensaje (esto es muy dependiente del formato del log)
-                attempts_match = re.search(r"\((\d+)\s+failures\)", line) # Ejemplo: "(3 failures)"
+                ban_time_ns = int(log_entry['ts'])
+                ban_time_str = datetime.utcfromtimestamp(ban_time_ns / 1_000_000_000).strftime('%Y-%m-%d %H:%M:%S')
+
+                # Capturar intentos fallidos (ej. "after 5 failures")
+                attempts_match = re.search(r"after\s+(\d+)\s+failures?", line, re.IGNORECASE)
                 failed_attempts = int(attempts_match.group(1)) if attempts_match else None
 
                 entries.append({
                     "ip": ip,
                     "jail": jail,
-                    "ban_time": ban_time_ns,
-                    "failed_attempts": failed_attempts, # Puede ser None
-                    "raw_log": line # Incluir el log original puede ser útil
+                    "ban_time": ban_time_str,
+                    "failed_attempts": failed_attempts,
+                    "raw_log": line
                 })
-                banned_ips.add(ip) # Marcar como añadida
+                banned_ips.add(ip)
 
-    # Aplicar paginación a la lista recolectada y ordenada
+    # Paginación ya en orden descendente
     start_idx = page * size
     end_idx = start_idx + size
-    # Devolver solo la página solicitada
     return entries[start_idx:end_idx]
 
 
