@@ -332,71 +332,74 @@ async def get_filtered_logs(
     size: int = Query(10, ge=1, le=100),
     start: Optional[int] = Query(None, description="Inicio del rango de tiempo (timestamp UNIX en segundos)."),
     end: Optional[int] = Query(None, description="Fin del rango de tiempo (timestamp UNIX en segundos)."),
-    # 'service' aquí se refiere a la etiqueta 'job' de Loki/Promtail
     service: Optional[str] = Query(None, description="Filtrar por etiqueta 'job' (e.g., 'fail2ban')."),
     level: Optional[str] = Query(None, description="Filtrar por nivel de log (buscar texto en el mensaje)."),
     filter_text: Optional[str] = Query(None, description="Texto libre a buscar en el mensaje del log."),
 ):
     # Construir la query de LogQL
-    query_parts = ['{job="fail2ban"}'] # Base query obligatoria
+    query_parts = ['{job="fail2ban"}']
     if service:
-        # Sobrescribe si se especifica, aunque ya filtramos por job="fail2ban"
-        # Podría ser útil si tuvieras logs de diferentes jails bajo el mismo job pero con otra etiqueta
-        query_parts[0] = f'{{job="{service}"}}' # O añadir como {job="fail2ban", service_label="algo"} si tienes más etiquetas
+        query_parts[0] = f'{{job="{service}"}}'
     if level:
-        # Filtrado de línea por nivel (sensible a mayúsculas/minúsculas por defecto en LogQL)
-        query_parts.append(f'|= `{level}`') # Usar backticks para buscar la cadena exacta
+        query_parts.append(f'|= `{level}`')
     if filter_text:
-        # Filtrado de línea por texto libre
         query_parts.append(f'|= `{filter_text}`')
 
     logql_query = " ".join(query_parts)
 
     params = {
         "query": logql_query,
-        "limit": 1000, # Obtener más para paginar después
-        "direction": "backward", # Logs más recientes primero por defecto
+        "limit": 1000,
+        "direction": "backward",
     }
     if start:
-        # Convertir de segundos UNIX a nanosegundos
         params["start"] = str(start * 1_000_000_000)
     if end:
-        # Convertir de segundos UNIX a nanosegundos
         params["end"] = str(end * 1_000_000_000)
 
     async with AsyncClient() as client:
         try:
-             # --- CAMBIO AQUÍ ---
+            # Fix the import reference at the top of your file:
+            # from configuration.settings import LOKI_QUERY_URL
+            # should be:
+            # from config.settings import LOKI_QUERY_URL
             response = await client.get(LOKI_QUERY_URL, params=params, timeout=10.0)
-             # -------------------
             response.raise_for_status()
         except (RequestError, HTTPStatusError) as exc:
             raise HTTPException(status_code=503, detail=f"Error al contactar Loki: {str(exc)}")
 
     results = response.json().get("data", {}).get("result", [])
-    entries = []
 
-    # Recolectar todos los valores de todos los streams
-    all_values = []
+    # Store entries with numeric timestamp for proper sorting
+    temp_values = []
     for stream in results:
         labels = stream.get("stream", {})
         service_name = labels.get("job", "desconocido")
-        # Intentar extraer nivel de log (puede no estar como etiqueta)
-        level_value = labels.get("level", "info") # O parsearlo del mensaje si es necesario
+        level_value = labels.get("level", "info")
 
         for ts, line in stream.get("values", []):
-            all_values.append({
-                "timestamp": datetime.fromtimestamp(int(ts) / 1_000_000_000).strftime("%Y-%m-%d %H:%M:%S"), # Formato legible
+            ts_numeric = int(ts)
+            temp_values.append({
+                "timestamp_ns": ts_numeric,
                 "service": service_name,
                 "message": line,
-                "level": level_value # Puede ser 'info' por defecto si no hay etiqueta 'level'
+                "level": level_value
             })
 
-    # Ordenar por timestamp (descendente, ya que pedimos 'backward')
-    # Loki debería devolverlos ordenados, pero re-ordenamos por si acaso
-    all_values.sort(key=lambda x: int(x['timestamp']), reverse=True)
+    # Sort by numeric timestamp
+    temp_values.sort(key=lambda x: x['timestamp_ns'], reverse=True)
 
-    # Aplicar paginación
+    # Create final list with formatted timestamps
+    all_values = []
+    for item in temp_values:
+        all_values.append({
+            "timestamp": datetime.fromtimestamp(item["timestamp_ns"] / 1_000_000_000).strftime("%Y-%m-%d %H:%M:%S"),
+            "service": item["service"],
+            "message": item["message"],
+            "level": item["level"]
+        })
+
+    # Apply pagination
     start_idx = page * size
     end_idx = start_idx + size
     return all_values[start_idx:end_idx]
