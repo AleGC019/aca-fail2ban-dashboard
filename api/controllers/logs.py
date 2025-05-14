@@ -147,7 +147,7 @@ async def websocket_fail2ban_logs(websocket: WebSocket):
             for stream in results:
                 labels = stream.get("stream", {})
                 service = labels.get("job", "desconocido")
-                level = labels.get("level", "info")  # Asumir "info" si no se encuentra
+                level = labels.get("level", "desconocido")  # Asumir "info" si no se encuentra
 
                 values = sorted(stream.get("values", []), key=lambda x: int(x[0]))
 
@@ -386,7 +386,7 @@ async def get_filtered_logs(
 
         for ts, line in stream.get("values", []):
             all_values.append({
-                "timestamp": ts, # Mantener como string de nanosegundos
+                "timestamp": datetime.fromtimestamp(int(ts) / 1_000_000_000).strftime("%Y-%m-%d %H:%M:%S"), # Formato legible
                 "service": service_name,
                 "message": line,
                 "level": level_value # Puede ser 'info' por defecto si no hay etiqueta 'level'

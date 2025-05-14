@@ -23,13 +23,8 @@ scrape_configs:
       #    expression: >
       #      ^(?P<time>\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}),\d+\s+fail2ban\.(?P<component>\S+)\s+(?P<pid>\d+):\s+(?P<level>\S+)\s+(?P<msg>.*)$
       - regex:
-        expression: >
-          ^(?P<time>\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}),\d+\s+
-            fail2ban\.(?P<component>\S+)\s+
-            \[(?P<pid>\d+)\]:\s+
-            (?P<level>\S+)\s+
-            \[(?P<jail>[^\]]+)\]\s+
-            (?P<msg>.*)$
+          expression: >
+            ^(?P<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+\s+fail2ban\.(?P<component>\S+)\s+\[(?P<pid>\d+)\]:\s+(?P<level>\S+)\s+\[(?P<jail>[^\]]+)\]\s+(?P<msg>.*)$
       - timestamp:
           source: time
           format: '2006-01-02 15:04:05'
