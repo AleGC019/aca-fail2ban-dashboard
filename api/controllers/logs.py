@@ -22,7 +22,6 @@ router = APIRouter()
 
 # --- INICIO: Código de la versión más completa de controllers/logs.py ---
 
-# web socket para recibir logs de fail2ban en tiempo real
 #@router.websocket("/ws/fail2ban-logs")
 #async def websocket_fail2ban_logs(websocket: WebSocket):
 #    await websocket.accept()
@@ -31,30 +30,27 @@ router = APIRouter()
 #    try:
 #        while True:
 #            params = {
-#                "query": '{job="fail2ban"}',
+#                "query": '{job="fail2ban"}',  # Puedes filtrar más si necesitas
 #                "limit": 100,
 #            }
 #
 #            if last_timestamp:
-#                params["start"] = str(int(last_timestamp) + 1) # Suma 1 nanosegundo para evitar duplicados
+#                params["start"] = str(int(last_timestamp) + 1)  # Sumar 1 nanosegundo para evitar duplicados
 #
 #            async with AsyncClient() as client:
 #                try:
-#                    # --- CAMBIO AQUÍ ---
-#                    # Usa LOKI_QUERY_URL directamente
 #                    response = await client.get(LOKI_QUERY_URL, params=params, timeout=10.0)
-#                    # -------------------
 #                    response.raise_for_status()
 #                except (RequestError, HTTPStatusError) as exc:
 #                    try:
 #                        await websocket.send_json({"error": f"Error al contactar Loki: {str(exc)}"})
-#                    except WebSocketDisconnect: # Manejar desconexión si ocurre al enviar error
+#                    except WebSocketDisconnect:
+#                        break  # Cliente desconectado, salimos del loop
+#                    except Exception as send_exc:
+#                        print(f"Error al enviar mensaje por websocket: {send_exc}")
 #                        break
-#                    except Exception as send_exc: # Manejar otros errores de envío
-#                        print(f"Error al enviar mensaje de error por websocket: {send_exc}")
-#                        break # Salir si no se puede enviar
-#                    await asyncio.sleep(5)
-#                    continue # Reintentar la conexión a Loki
+#                    await asyncio.sleep(5)  # Reintentar después de 5 segundos
+#                    continue
 #
 #            data = response.json().get("data", {})
 #            results = data.get("result", [])
@@ -63,54 +59,45 @@ router = APIRouter()
 #            for stream in results:
 #                labels = stream.get("stream", {})
 #                service = labels.get("job", "desconocido")
-#                level = labels.get("level", "info") # Asumiendo que 'level' puede estar en las etiquetas de Loki
+#                level = labels.get("level", "desconocido")  # Asumir "info" si no se encuentra
 #
-#                # Ordenar valores por timestamp (ya suelen venir ordenados, pero por seguridad)
 #                values = sorted(stream.get("values", []), key=lambda x: int(x[0]))
 #
 #                for ts, line in values:
-#                    # Actualizar last_timestamp con el timestamp MÁS RECIENTE procesado
 #                    if last_timestamp is None or int(ts) > int(last_timestamp):
-#                       last_timestamp = ts
+#                        last_timestamp = ts
 #
 #                    message_data = {
-#                        "timestamp": ts,
+#                        "timestamp": datetime.fromtimestamp(int(ts) / 1_000_000_000).strftime("%Y-%m-%d %H:%M:%S"),
 #                        "service": service,
 #                        "message": line,
 #                        "level": level,
 #                    }
-#                    new_entries.append((int(ts), message_data)) # Guardar con timestamp numérico para ordenar
+#                    new_entries.append((int(ts), message_data))  # Guardar con timestamp para ordenar
 #
-#            # Ordenar todas las entradas nuevas de todos los streams por timestamp
-#            new_entries.sort(key=lambda x: x[0])
+#            # Ordenar las nuevas entradas por timestamp (de más reciente a más antiguo)
+#            new_entries.sort(key=lambda x: x[0], reverse=True)
 #
-#            # Enviar entradas ordenadas
+#            # Enviar las entradas ordenadas
 #            for _, message_data in new_entries:
-#                 try:
-#                     await websocket.send_json(message_data)
-#                 except WebSocketDisconnect:
-#                     print("Cliente desconectado mientras se enviaban mensajes.")
-#                     return # Salir de la función si el cliente se desconecta
-#                 except Exception as send_exc:
-#                     print(f"Error al enviar mensaje por websocket: {send_exc}")
-#                     # Considerar si continuar o detenerse ante errores de envío
+#                try:
+#                    await websocket.send_json(message_data)
+#                except WebSocketDisconnect:
+#                    print("Cliente desconectado mientras se enviaban mensajes.")
+#                    return
+#                except Exception as send_exc:
+#                    print(f"Error al enviar mensaje por websocket: {send_exc}")
 #
-#            # Esperar antes de la siguiente consulta
-#            await asyncio.sleep(5)
+#            await asyncio.sleep(5)  # Esperar antes de la siguiente consulta
 #
 #    except WebSocketDisconnect:
 #        print("Cliente desconectado.")
 #    except Exception as e:
 #        print(f"Error inesperado en el websocket: {str(e)}")
-#        # Intentar enviar un mensaje de error final si la conexión aún está activa
 #        try:
 #            await websocket.send_json({"error": f"Error inesperado del servidor: {str(e)}"})
 #        except Exception as final_send_exc:
-#             print(f"No se pudo enviar el mensaje de error final: {final_send_exc}")
-#        finally:
-#             # Asegurarse de cerrar el websocket en caso de error inesperado no manejado
-#             # await websocket.close() # Comentado porque uvicorn/fastapi suelen manejarlo
-#             pass
+#            print(f"No se pudo enviar el mensaje de error final: {final_send_exc}")
 @router.websocket("/ws/fail2ban-logs")
 async def websocket_fail2ban_logs(websocket: WebSocket):
     await websocket.accept()
@@ -119,12 +106,12 @@ async def websocket_fail2ban_logs(websocket: WebSocket):
     try:
         while True:
             params = {
-                "query": '{job="fail2ban"}',  # Puedes filtrar más si necesitas
+                "query": '{job="fail2ban"}',
                 "limit": 100,
             }
 
             if last_timestamp:
-                params["start"] = str(int(last_timestamp) + 1)  # Sumar 1 nanosegundo para evitar duplicados
+                params["start"] = str(int(last_timestamp) + 1)
 
             async with AsyncClient() as client:
                 try:
@@ -134,11 +121,11 @@ async def websocket_fail2ban_logs(websocket: WebSocket):
                     try:
                         await websocket.send_json({"error": f"Error al contactar Loki: {str(exc)}"})
                     except WebSocketDisconnect:
-                        break  # Cliente desconectado, salimos del loop
+                        break
                     except Exception as send_exc:
                         print(f"Error al enviar mensaje por websocket: {send_exc}")
                         break
-                    await asyncio.sleep(5)  # Reintentar después de 5 segundos
+                    await asyncio.sleep(5)
                     continue
 
             data = response.json().get("data", {})
@@ -148,7 +135,6 @@ async def websocket_fail2ban_logs(websocket: WebSocket):
             for stream in results:
                 labels = stream.get("stream", {})
                 service = labels.get("job", "desconocido")
-                level = labels.get("level", "desconocido")  # Asumir "info" si no se encuentra
 
                 values = sorted(stream.get("values", []), key=lambda x: int(x[0]))
 
@@ -156,18 +142,21 @@ async def websocket_fail2ban_logs(websocket: WebSocket):
                     if last_timestamp is None or int(ts) > int(last_timestamp):
                         last_timestamp = ts
 
+                    # Extraer 'level' desde el texto del log, por ejemplo:
+                    # '2025-05-15 13:38:19,343 fail2ban.actions [19171]: NOTICE  [sshd] Ban 109.196.143.106'
+                    level_match = re.search(r"]:\s*(\w+)", line)
+                    level = level_match.group(1).lower() if level_match else "info"
+
                     message_data = {
                         "timestamp": datetime.fromtimestamp(int(ts) / 1_000_000_000).strftime("%Y-%m-%d %H:%M:%S"),
                         "service": service,
                         "message": line,
                         "level": level,
                     }
-                    new_entries.append((int(ts), message_data))  # Guardar con timestamp para ordenar
+                    new_entries.append((int(ts), message_data))
 
-            # Ordenar las nuevas entradas por timestamp (de más reciente a más antiguo)
             new_entries.sort(key=lambda x: x[0], reverse=True)
 
-            # Enviar las entradas ordenadas
             for _, message_data in new_entries:
                 try:
                     await websocket.send_json(message_data)
@@ -177,7 +166,7 @@ async def websocket_fail2ban_logs(websocket: WebSocket):
                 except Exception as send_exc:
                     print(f"Error al enviar mensaje por websocket: {send_exc}")
 
-            await asyncio.sleep(5)  # Esperar antes de la siguiente consulta
+            await asyncio.sleep(5)  # Consulta cada 5 segundos
 
     except WebSocketDisconnect:
         print("Cliente desconectado.")
@@ -187,6 +176,7 @@ async def websocket_fail2ban_logs(websocket: WebSocket):
             await websocket.send_json({"error": f"Error inesperado del servidor: {str(e)}"})
         except Exception as final_send_exc:
             print(f"No se pudo enviar el mensaje de error final: {final_send_exc}")
+
 
 #@router.get("/fail2ban/banned-ips")
 #async def get_banned_ips(
