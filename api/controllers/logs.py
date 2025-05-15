@@ -11,6 +11,7 @@ import time
 import re
 from typing import List, Optional # Añadido Optional para claridad si se usa
 from datetime import datetime
+import math
 
 # Importaciones necesarias que podrían faltar según el contexto completo
 # Asegúrate de que estas u otras dependencias necesarias estén aquí si las usas en otras partes del archivo
@@ -321,9 +322,11 @@ async def get_banned_ips(
     start_idx = page * size
     end_idx = start_idx + size
     paginated_entries = entries[start_idx:end_idx]
+    total_pages = math.ceil(total_count / size)
 
     return {
         "totalCount": total_count,
+        "totalPages": total_pages,
         "hasNextPage": end_idx < total_count,
         "hasPreviousPage": start_idx > 0,
         "currentPage": page,
@@ -488,8 +491,11 @@ async def get_filtered_logs(
 
     paginated = all_values[start_idx:end_idx]
 
+    total_pages = math.ceil(total / size)
+
     return {
         "totalCount": total,
+        "totalPages": total_pages,
         "currentPage": page,
         "hasNextPage": end_idx < total,
         "hasPreviousPage": page > 0,
