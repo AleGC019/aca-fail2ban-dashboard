@@ -287,7 +287,6 @@ async def get_banned_ips(
     for log_entry in all_values:
         line = log_entry['line']
 
-        # Buscar IP baneada
         match = re.search(r"(?:Ban|already banned)\s+(\d{1,3}(?:\.\d{1,3}){3})", line)
         if not match:
             continue
@@ -296,11 +295,11 @@ async def get_banned_ips(
         if ip in banned_ips:
             continue
 
-        # Extraer jail desde el mensaje del log
-        jail_match = re.search(r"\[\s*(\w+)\s*\]", line)
-        jail = jail_match.group(1) if jail_match else "desconocido"
+        # Extraer jail desde el segundo grupo entre corchetes
+        jail_match = re.findall(r"\[([^\]]+)\]", line)
+        jail = jail_match[1] if len(jail_match) > 1 else "desconocido"
 
-        # Intentos fallidos (ej. "after 5 failures")
+        # Intentos fallidos (por defecto 1 si no se encuentra)
         attempts_match = re.search(r"after\s+(\d+)\s+failures?", line, re.IGNORECASE)
         failed_attempts = int(attempts_match.group(1)) if attempts_match else 1
 
@@ -315,6 +314,7 @@ async def get_banned_ips(
             "raw_log": line
         })
         banned_ips.add(ip)
+
 
     # Paginación
     total_count = len(entries)
@@ -462,11 +462,11 @@ async def get_filtered_logs(
 
             # Buscar nivel de log dentro del mensaje (INFO, DEBUG, etc.)
             level_match = re.search(r"\b(INFO|DEBUG|WARNING|ERROR|CRITICAL)\b", line)
-            log_level = level_match.group(1).lower() if level_match else "info"
+            log_level = level_match.group(1).upper if level_match else "INFO"
 
             # Buscar tipo de evento (opcional)
-            event_match = re.search(r"\] (Found|Processing|Total|Ban|Unban|Started|Stopped)", line)
-            event_type = event_match.group(1) if event_match else None
+            event_match = re.search(r"\] (Found|Processing|Total|Ban|Unban|Started|Stopped|Banned|Unbanned)", line)
+            event_type = event_match.group(1) if event_match else "Unknown"
 
             all_values.append({
                 "date": readable_date,
