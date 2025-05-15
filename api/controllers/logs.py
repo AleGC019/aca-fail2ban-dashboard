@@ -187,78 +187,68 @@ async def websocket_fail2ban_logs(websocket: WebSocket):
         except Exception as final_send_exc:
             print(f"No se pudo enviar el mensaje de error final: {final_send_exc}")
 
-
-# Ruta pa obtener las ips baneadas (ejemplo basado en logs, NO en estado real de fail2ban-client)
 #@router.get("/fail2ban/banned-ips")
 #async def get_banned_ips(
 #    page: int = Query(0, ge=0, description="Número de página."),
 #    size: int = Query(10, ge=1, le=100, description="Tamaño de página."),
 #):
-#    # Busca logs que contengan "Ban" en la última hora (ajusta según necesidad)
-#    # ¡IMPORTANTE!: Esto NO garantiza que la IP siga baneada. Solo muestra IPs que FUERON baneadas.
-#    # Para el estado actual, necesitarías usar `fail2ban-client status <jail>` y parsear la salida.
-#    start_time_sec = int(time.time()) - 3600 # Última hora
-#    start_ns = start_time_sec * 1_000_000_000 # Convertir a nanosegundos
+#    start_time_sec = int(time.time()) - 3600  # Última hora
+#    start_ns = start_time_sec * 1_000_000_000
 #
 #    params = {
-#        "query": '{job="fail2ban"} |= "Ban"', # Busca la palabra "Ban"
+#        "query": '{job="fail2ban"} |= "Ban"',
 #        "start": str(start_ns),
-#        "limit": 1000, # Obtener un límite mayor para tener suficientes datos para paginar
-#                       # Idealmente, Loki soporta paginación, pero aquí simulamos post-filtrado
-#        "direction": "forward", # Obtener logs desde el más antiguo al más reciente
+#        "limit": 1000,
+#        "direction": "backward",  # <- más reciente primero
 #    }
 #
 #    async with AsyncClient() as client:
 #        try:
-#            # --- CAMBIO AQUÍ ---
 #            response = await client.get(LOKI_QUERY_URL, params=params, timeout=10.0)
-#            # -------------------
 #            response.raise_for_status()
 #        except (RequestError, HTTPStatusError) as exc:
 #            raise HTTPException(status_code=503, detail=f"Error al contactar Loki: {str(exc)}")
 #
 #    results = response.json().get("data", {}).get("result", [])
 #    entries = []
-#    banned_ips = set() # Para evitar duplicados si una IP es baneada múltiples veces en el rango
+#    banned_ips = set()
 #
-#    # Procesar resultados en orden cronológico
 #    all_values = []
 #    for stream in results:
 #        labels = stream.get("stream", {})
-#        jail = labels.get("jail", "desconocido") # Asumiendo que promtail añade la etiqueta 'jail'
+#        jail = labels.get("jail", "desconocido")
 #        for ts, line in stream.get("values", []):
-#             all_values.append({'ts': ts, 'line': line, 'jail': jail})
+#            all_values.append({'ts': ts, 'line': line, 'jail': jail})
 #
-#    # Ordenar todos los logs por timestamp
-#    all_values.sort(key=lambda x: int(x['ts']))
+#    # Ordenar del más reciente al más antiguo
+#    all_values.sort(key=lambda x: int(x['ts']), reverse=True)
 #
 #    for log_entry in all_values:
 #        line = log_entry['line']
-#        # Expresión regular más robusta para capturar IP en logs de ban
-#        match = re.search(r"(?:Ban|already banned)\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", line)
+#        match = re.search(r"(?:Ban|already banned)\s+(\d{1,3}(?:\.\d{1,3}){3})", line)
 #        if match:
 #            ip = match.group(1)
-#            # Solo añadir si no se ha añadido ya para este periodo de logs
 #            if ip not in banned_ips:
 #                jail = log_entry['jail']
-#                ban_time_ns = log_entry['ts'] # Timestamp en nanosegundos string
-#                # Opcional: buscar intentos fallidos si están en el mensaje (esto es muy dependiente del formato del log)
-#                attempts_match = re.search(r"\((\d+)\s+failures\)", line) # Ejemplo: "(3 failures)"
+#                ban_time_ns = int(log_entry['ts'])
+#                ban_time_str = datetime.utcfromtimestamp(ban_time_ns / 1_000_000_000).strftime('%Y-%m-%d %H:%M:%S')
+#
+#                # Capturar intentos fallidos (ej. "after 5 failures")
+#                attempts_match = re.search(r"after\s+(\d+)\s+failures?", line, re.IGNORECASE)
 #                failed_attempts = int(attempts_match.group(1)) if attempts_match else None
 #
 #                entries.append({
 #                    "ip": ip,
 #                    "jail": jail,
-#                    "ban_time": ban_time_ns,
-#                    "failed_attempts": failed_attempts, # Puede ser None
-#                    "raw_log": line # Incluir el log original puede ser útil
+#                    "ban_time": ban_time_str,
+#                    "failed_attempts": failed_attempts,
+#                    "raw_log": line
 #                })
-#                banned_ips.add(ip) # Marcar como añadida
+#                banned_ips.add(ip)
 #
-#    # Aplicar paginación a la lista recolectada y ordenada
+#    # Paginación ya en orden descendente
 #    start_idx = page * size
 #    end_idx = start_idx + size
-#    # Devolver solo la página solicitada
 #    return entries[start_idx:end_idx]
 @router.get("/fail2ban/banned-ips")
 async def get_banned_ips(
@@ -272,7 +262,7 @@ async def get_banned_ips(
         "query": '{job="fail2ban"} |= "Ban"',
         "start": str(start_ns),
         "limit": 1000,
-        "direction": "backward",  # <- más reciente primero
+        "direction": "backward",
     }
 
     async with AsyncClient() as client:
@@ -285,121 +275,226 @@ async def get_banned_ips(
     results = response.json().get("data", {}).get("result", [])
     entries = []
     banned_ips = set()
-
     all_values = []
+
     for stream in results:
-        labels = stream.get("stream", {})
-        jail = labels.get("jail", "desconocido")
         for ts, line in stream.get("values", []):
-            all_values.append({'ts': ts, 'line': line, 'jail': jail})
+            all_values.append({'ts': ts, 'line': line})
 
     # Ordenar del más reciente al más antiguo
     all_values.sort(key=lambda x: int(x['ts']), reverse=True)
 
     for log_entry in all_values:
         line = log_entry['line']
+
+        # Buscar IP baneada
         match = re.search(r"(?:Ban|already banned)\s+(\d{1,3}(?:\.\d{1,3}){3})", line)
-        if match:
-            ip = match.group(1)
-            if ip not in banned_ips:
-                jail = log_entry['jail']
-                ban_time_ns = int(log_entry['ts'])
-                ban_time_str = datetime.utcfromtimestamp(ban_time_ns / 1_000_000_000).strftime('%Y-%m-%d %H:%M:%S')
+        if not match:
+            continue
 
-                # Capturar intentos fallidos (ej. "after 5 failures")
-                attempts_match = re.search(r"after\s+(\d+)\s+failures?", line, re.IGNORECASE)
-                failed_attempts = int(attempts_match.group(1)) if attempts_match else None
+        ip = match.group(1)
+        if ip in banned_ips:
+            continue
 
-                entries.append({
-                    "ip": ip,
-                    "jail": jail,
-                    "ban_time": ban_time_str,
-                    "failed_attempts": failed_attempts,
-                    "raw_log": line
-                })
-                banned_ips.add(ip)
+        # Extraer jail desde el mensaje del log
+        jail_match = re.search(r"\[\s*(\w+)\s*\]", line)
+        jail = jail_match.group(1) if jail_match else "desconocido"
 
-    # Paginación ya en orden descendente
+        # Intentos fallidos (ej. "after 5 failures")
+        attempts_match = re.search(r"after\s+(\d+)\s+failures?", line, re.IGNORECASE)
+        failed_attempts = int(attempts_match.group(1)) if attempts_match else 1
+
+        ban_time_ns = int(log_entry['ts'])
+        ban_time_str = datetime.utcfromtimestamp(ban_time_ns / 1_000_000_000).strftime('%Y-%m-%d %H:%M:%S')
+
+        entries.append({
+            "ip": ip,
+            "jail": jail,
+            "ban_time": ban_time_str,
+            "failed_attempts": failed_attempts,
+            "raw_log": line
+        })
+        banned_ips.add(ip)
+
+    # Paginación
+    total_count = len(entries)
     start_idx = page * size
     end_idx = start_idx + size
-    return entries[start_idx:end_idx]
+    paginated_entries = entries[start_idx:end_idx]
+
+    return {
+        "totalCount": total_count,
+        "hasNextPage": end_idx < total_count,
+        "hasPreviousPage": start_idx > 0,
+        "currentPage": page,
+        "values": paginated_entries,
+    }
 
 
 # Ruta para obtener logs filtrados (similar a la función query_loki pero con más filtros)
+#@router.get("/fail2ban/logs")
+#async def get_filtered_logs(
+#    page: int = Query(0, ge=0),
+#    size: int = Query(10, ge=1, le=100),
+#    start: Optional[int] = Query(None, description="Inicio del rango de tiempo (timestamp UNIX en segundos)."),
+#    end: Optional[int] = Query(None, description="Fin del rango de tiempo (timestamp UNIX en segundos)."),
+#    # 'service' aquí se refiere a la etiqueta 'job' de Loki/Promtail
+#    service: Optional[str] = Query(None, description="Filtrar por etiqueta 'job' (e.g., 'fail2ban')."),
+#    level: Optional[str] = Query(None, description="Filtrar por nivel de log (buscar texto en el mensaje)."),
+#    filter_text: Optional[str] = Query(None, description="Texto libre a buscar en el mensaje del log."),
+#):
+#    # Construir la query de LogQL
+#    query_parts = ['{job="fail2ban"}'] # Base query obligatoria
+#    if service:
+#        # Sobrescribe si se especifica, aunque ya filtramos por job="fail2ban"
+#        # Podría ser útil si tuvieras logs de diferentes jails bajo el mismo job pero con otra etiqueta
+#        query_parts[0] = f'{{job="{service}"}}' # O añadir como {job="fail2ban", service_label="algo"} si tienes más etiquetas
+#    if level:
+#        # Filtrado de línea por nivel (sensible a mayúsculas/minúsculas por defecto en LogQL)
+#        query_parts.append(f'|= `{level}`') # Usar backticks para buscar la cadena exacta
+#    if filter_text:
+#        # Filtrado de línea por texto libre
+#        query_parts.append(f'|= `{filter_text}`')
+#
+#    logql_query = " ".join(query_parts)
+#
+#    params = {
+#        "query": logql_query,
+#        "limit": 1000, # Obtener más para paginar después
+#        "direction": "backward", # Logs más recientes primero por defecto
+#    }
+#    if start:
+#        # Convertir de segundos UNIX a nanosegundos
+#        params["start"] = str(start * 1_000_000_000)
+#    if end:
+#        # Convertir de segundos UNIX a nanosegundos
+#        params["end"] = str(end * 1_000_000_000)
+#
+#    async with AsyncClient() as client:
+#        try:
+#             # --- CAMBIO AQUÍ ---
+#            response = await client.get(LOKI_QUERY_URL, params=params, timeout=10.0)
+#             # -------------------
+#            response.raise_for_status()
+#        except (RequestError, HTTPStatusError) as exc:
+#            raise HTTPException(status_code=503, detail=f"Error al contactar Loki: {str(exc)}")
+#
+#    results = response.json().get("data", {}).get("result", [])
+#    entries = []
+#
+#    # Recolectar todos los valores de todos los streams
+#    all_values = []
+#    for stream in results:
+#        labels = stream.get("stream", {})
+#        service_name = labels.get("job", "desconocido")
+#        # Intentar extraer nivel de log (puede no estar como etiqueta)
+#        level_value = labels.get("level", "info") # O parsearlo del mensaje si es necesario
+#
+#        for ts, line in stream.get("values", []):
+#            all_values.append({
+#                "timestamp": datetime.fromtimestamp(int(ts) / 1_000_000_000).strftime("%Y-%m-%d %H:%M:%S"), # Formato legible
+#                "service": service_name,
+#                "message": line,
+#                "level": level_value # Puede ser 'info' por defecto si no hay etiqueta 'level'
+#            })
+#
+#    # Ordenar por timestamp (descendente, ya que pedimos 'backward')
+#    # Loki debería devolverlos ordenados, pero re-ordenamos por si acaso
+#    all_values.sort(key=lambda x: int(x['timestamp']), reverse=True)
+#
+#    # Aplicar paginación
+#    start_idx = page * size
+#    end_idx = start_idx + size
+#    return all_values[start_idx:end_idx]
 @router.get("/fail2ban/logs")
 async def get_filtered_logs(
     page: int = Query(0, ge=0),
     size: int = Query(10, ge=1, le=100),
     start: Optional[int] = Query(None, description="Inicio del rango de tiempo (timestamp UNIX en segundos)."),
     end: Optional[int] = Query(None, description="Fin del rango de tiempo (timestamp UNIX en segundos)."),
-    # 'service' aquí se refiere a la etiqueta 'job' de Loki/Promtail
     service: Optional[str] = Query(None, description="Filtrar por etiqueta 'job' (e.g., 'fail2ban')."),
     level: Optional[str] = Query(None, description="Filtrar por nivel de log (buscar texto en el mensaje)."),
-    filter_text: Optional[str] = Query(None, description="Texto libre a buscar en el mensaje del log."),
+    filter_text: Optional[str] = Query(None, description="Texto libre a buscar en el mensaje del log.")
 ):
-    # Construir la query de LogQL
-    query_parts = ['{job="fail2ban"}'] # Base query obligatoria
+    query_parts = ['{job="fail2ban"}']
     if service:
-        # Sobrescribe si se especifica, aunque ya filtramos por job="fail2ban"
-        # Podría ser útil si tuvieras logs de diferentes jails bajo el mismo job pero con otra etiqueta
-        query_parts[0] = f'{{job="{service}"}}' # O añadir como {job="fail2ban", service_label="algo"} si tienes más etiquetas
+        query_parts[0] = f'{{job="{service}"}}'
     if level:
-        # Filtrado de línea por nivel (sensible a mayúsculas/minúsculas por defecto en LogQL)
-        query_parts.append(f'|= `{level}`') # Usar backticks para buscar la cadena exacta
+        query_parts.append(f'|= `{level}`')
     if filter_text:
-        # Filtrado de línea por texto libre
         query_parts.append(f'|= `{filter_text}`')
 
     logql_query = " ".join(query_parts)
 
     params = {
         "query": logql_query,
-        "limit": 1000, # Obtener más para paginar después
-        "direction": "backward", # Logs más recientes primero por defecto
+        "limit": 1000,
+        "direction": "backward",
     }
     if start:
-        # Convertir de segundos UNIX a nanosegundos
         params["start"] = str(start * 1_000_000_000)
     if end:
-        # Convertir de segundos UNIX a nanosegundos
         params["end"] = str(end * 1_000_000_000)
 
     async with AsyncClient() as client:
         try:
-             # --- CAMBIO AQUÍ ---
             response = await client.get(LOKI_QUERY_URL, params=params, timeout=10.0)
-             # -------------------
             response.raise_for_status()
         except (RequestError, HTTPStatusError) as exc:
             raise HTTPException(status_code=503, detail=f"Error al contactar Loki: {str(exc)}")
 
     results = response.json().get("data", {}).get("result", [])
-    entries = []
-
-    # Recolectar todos los valores de todos los streams
     all_values = []
-    for stream in results:
-        labels = stream.get("stream", {})
-        service_name = labels.get("job", "desconocido")
-        # Intentar extraer nivel de log (puede no estar como etiqueta)
-        level_value = labels.get("level", "info") # O parsearlo del mensaje si es necesario
 
+    for stream in results:
+        service_name = stream.get("stream", {}).get("job", "desconocido")
         for ts, line in stream.get("values", []):
+            timestamp = datetime.fromtimestamp(int(ts) / 1_000_000_000)
+            readable_date = timestamp.strftime("%Y-%m-%d %H:%M:%S")
+
+            # Buscar PID: formato [pid]
+            pid_match = re.search(r"\[(\d+)]", line)
+            pid = pid_match.group(1) if pid_match else None
+
+            # Buscar IP
+            ip_match = re.search(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", line)
+            ip = ip_match.group(0) if ip_match else None
+
+            # Buscar nivel de log dentro del mensaje (INFO, DEBUG, etc.)
+            level_match = re.search(r"\b(INFO|DEBUG|WARNING|ERROR|CRITICAL)\b", line)
+            log_level = level_match.group(1).lower() if level_match else "info"
+
+            # Buscar tipo de evento (opcional)
+            event_match = re.search(r"\] (Found|Processing|Total|Ban|Unban|Started|Stopped)", line)
+            event_type = event_match.group(1) if event_match else None
+
             all_values.append({
-                "timestamp": datetime.fromtimestamp(int(ts) / 1_000_000_000).strftime("%Y-%m-%d %H:%M:%S"), # Formato legible
+                "date": readable_date,
+                "timestamp": readable_date,
                 "service": service_name,
-                "message": line,
-                "level": level_value # Puede ser 'info' por defecto si no hay etiqueta 'level'
+                "pid": pid,
+                "ip": ip,
+                "level": log_level,
+                "event_type": event_type,
+                "message": line.strip()
             })
 
-    # Ordenar por timestamp (descendente, ya que pedimos 'backward')
-    # Loki debería devolverlos ordenados, pero re-ordenamos por si acaso
-    all_values.sort(key=lambda x: int(x['timestamp']), reverse=True)
+    # Ordenar (más recientes primero)
+    all_values.sort(key=lambda x: x["timestamp"], reverse=True)
 
-    # Aplicar paginación
+    total = len(all_values)
     start_idx = page * size
     end_idx = start_idx + size
-    return all_values[start_idx:end_idx]
+
+    paginated = all_values[start_idx:end_idx]
+
+    return {
+        "totalCount": total,
+        "currentPage": page,
+        "hasNextPage": end_idx < total,
+        "hasPreviousPage": page > 0,
+        "values": paginated,
+    }
 
 # --- FIN: Código de la versión más completa de controllers/logs.py ---
 
