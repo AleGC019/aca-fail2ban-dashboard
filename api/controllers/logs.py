@@ -145,7 +145,7 @@ async def websocket_fail2ban_logs(websocket: WebSocket):
                     # Extraer 'level' desde el texto del log, por ejemplo:
                     # '2025-05-15 13:38:19,343 fail2ban.actions [19171]: NOTICE  [sshd] Ban 109.196.143.106'
                     level_match = re.search(r"]:\s*(\w+)", line)
-                    level = level_match.group(1).lower() if level_match else "info"
+                    level = level_match.group(1).upper() if level_match else "INFO"
 
                     message_data = {
                         "timestamp": datetime.fromtimestamp(int(ts) / 1_000_000_000).strftime("%Y-%m-%d %H:%M:%S"),
