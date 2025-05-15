@@ -462,7 +462,7 @@ async def get_filtered_logs(
 
             # Buscar nivel de log dentro del mensaje (INFO, DEBUG, etc.)
             level_match = re.search(r"\b(INFO|DEBUG|WARNING|ERROR|CRITICAL)\b", line)
-            log_level = level_match.group(1).upper if level_match else "INFO"
+            log_level = level_match.group(1).upper() if level_match else "INFO"
 
             # Buscar tipo de evento (opcional)
             event_match = re.search(r"\] (Found|Processing|Total|Ban|Unban|Started|Stopped|Banned|Unbanned)", line)
