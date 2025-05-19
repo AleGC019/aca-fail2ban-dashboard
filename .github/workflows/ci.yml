@@ -30,6 +30,12 @@ jobs:
       - name: Clonar repositorio
         uses: actions/checkout@v3
 
+      - name: Crear archivo .env desde .env.example
+        run: |
+          cp .env.example .env || echo "No .env.example found"
+          echo "FAIL2BAN_LOG_PATH=/tmp/fail2ban.log" >> .env
+          echo "FAIL2BAN_LOG_PATH=/tmp/fail2ban.log" >> $GITHUB_ENV
+
       - name: Construir servicios con Docker Compose
         run: docker compose build
 
