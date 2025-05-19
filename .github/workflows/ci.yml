@@ -1,0 +1,70 @@
+name: CI - aca-fail2ban-dashboard
+
+on:
+  push:
+    branches: [main, develop, feature/*]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  lint:
+    name: Fase 1 - Linter
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clonar repositorio
+        uses: actions/checkout@v3
+
+      - name: Instalar Python y Ruff
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install ruff
+
+      - name: Ejecutar Ruff (linter Python)
+        run: ruff api/
+
+  build:
+    name: Fase 2 - Build de contenedores
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clonar repositorio
+        uses: actions/checkout@v3
+
+      - name: Construir servicios con Docker Compose
+        run: docker-compose build
+
+  up:
+    name: Fase 3 - Levantar y probar servicios
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clonar repositorio
+        uses: actions/checkout@v3
+
+      - name: Crear archivo .env desde .env.example
+        run: cp .env.example .env || echo "No .env.example found"
+
+      - name: Levantar servicios
+        run: docker-compose up -d --build
+
+      - name: Esperar a que la API responda (health check)
+        run: |
+          for i in {1..10}; do
+            curl --fail http://localhost:8000/health && exit 0
+            echo "Esperando API..."
+            sleep 5
+          done
+          echo "La API no respondió a tiempo"
+          docker-compose logs
+          exit 1
+
+      - name: Verificar Loki
+        run: |
+          curl --fail http://localhost:3100/ready || {
+            echo "Loki no está listo"
+            docker-compose logs
+            exit 1
+          }
+
+      - name: Mostrar logs (si todo va bien)
+        run: docker-compose logs --no-color
