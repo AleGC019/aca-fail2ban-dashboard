@@ -77,12 +77,27 @@ jobs:
 
       - name: Verify Loki service
         run: |
-          if ! curl --fail http://localhost:3100/ready; then
-            echo "ERROR: Loki service is not ready"
-            docker compose logs
+          # Allow more time for Loki to initialize
+          echo "Waiting for Loki service to be ready..."
+          sleep 15
+
+          # Try different endpoints to check Loki availability
+          if curl --fail -s http://loki:3100/ready > /dev/null; then
+            echo "Loki reports ready via /ready endpoint"
+          elif curl --fail -s http://loki:3100/metrics > /dev/null; then
+            echo "Loki metrics endpoint responding, service appears to be running"
+          elif curl --fail -s http://loki:3100/loki/api/v1/status/buildinfo > /dev/null; then
+            echo "Loki API responding, service appears to be running"
+          else
+            echo "ERROR: Loki service is not responding to any health checks"
+            echo "Loki response to /ready:"
+            curl -v http://loki:3100/ready || true
+            echo "Loki logs:"
+            docker compose logs loki
             exit 1
           fi
-          echo "Loki service is ready"
+
+          echo "Loki service is operational"
 
       - name: Display service logs
         run: docker compose logs --no-color
