@@ -2,9 +2,9 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from httpx import AsyncClient, RequestError, HTTPStatusError
 from configuration.settings import settings
 import asyncio
-import time
 
 router = APIRouter()
+
 
 @router.websocket("/ws/fail2ban-logs")
 async def websocket_fail2ban_logs(websocket: WebSocket):
@@ -23,10 +23,14 @@ async def websocket_fail2ban_logs(websocket: WebSocket):
 
             async with AsyncClient() as client:
                 try:
-                    response = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=10.0)
+                    response = await client.get(
+                        settings.LOKI_QUERY_URL, params=params, timeout=10.0
+                    )
                     response.raise_for_status()
                 except (RequestError, HTTPStatusError) as exc:
-                    await websocket.send_json({"error": f"Error al contactar Loki: {str(exc)}"})
+                    await websocket.send_json(
+                        {"error": f"Error al contactar Loki: {str(exc)}"}
+                    )
                     await asyncio.sleep(5)
                     continue
 

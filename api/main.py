@@ -9,7 +9,7 @@ load_env_or_fail()
 app = FastAPI(
     title="Fail2ban Log API",
     description="API para consultar logs de Fail2ban y gestionar baneos.",
-    version="1.0.0"
+    version="1.0.0",
 )
 
 app.add_middleware(
