@@ -42,18 +42,12 @@ jobs:
         uses: actions/checkout@v3
 
       - name: Crear archivo .env desde .env.example
-        run: cp .env.example .env || echo "No .env.example found"
+        run: |
+          cp .env.example .env || echo "No .env.example found"
+          echo "FAIL2BAN_LOG_PATH=/tmp/fail2ban.log" >> .env
 
       - name: Levantar servicios
-        run:         promtail:
-          image: grafana/promtail:2.9.7
-          container_name: promtail
-          env_file:
-            - .env
-          volumes:
-            - ./promtail/promtail.yaml:/etc/promtail/promtail.yaml:ro
-            # Usar un valor por defecto para FAIL2BAN_LOG_PATH
-            - ${FAIL2BAN_LOG_PATH:-/tmp/fail2ban.log}:${FAIL2BAN_LOG_PATH:-/tmp/fail2ban.log}:ro compose up -d --build
+        run: docker compose up -d --build
       - name: Esperar a que la API responda (health check)
         run: |
           for i in {1..10}; do
