@@ -13,10 +13,6 @@ def load_env_or_fail():
         raise RuntimeError("La variable LOKI_QUERY_URL no está configurada")
 
 
-# Call the function to load environment variables
-load_env_or_fail()
-
-
 class Settings(BaseSettings):
     LOKI_QUERY_URL: str = os.getenv(
         "LOKI_QUERY_URL", "http://loki:3100/loki/api/v1/query_range"

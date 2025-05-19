@@ -58,7 +58,7 @@ jobs:
       - name: Esperar a que la API responda (health check)
         run: |
           for i in {1..10}; do
-            curl --fail http://localhost:8000/health && exit 0
+            curl --fail http://0.0.0.0:8000/health && exit 0
             echo "Esperando API..."
             sleep 5
           done

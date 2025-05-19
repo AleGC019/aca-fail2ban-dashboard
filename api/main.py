@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from controllers import logs, jails
-from configuration.settings import load_env_or_fail
+from configuration.settings import load_env_or_fail, router as settings_router
 
 # Carga variables de entorno y valida LOKI_QUERY_URL
 load_env_or_fail()
@@ -23,3 +23,4 @@ app.add_middleware(
 # Rutas
 app.include_router(logs.router, prefix="")
 app.include_router(jails.router, prefix="")
+app.include_router(settings_router, prefix="")
