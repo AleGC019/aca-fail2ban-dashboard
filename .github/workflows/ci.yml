@@ -45,6 +45,7 @@ jobs:
         run: |
           cp .env.example .env || echo "No .env.example found"
           echo "FAIL2BAN_LOG_PATH=/tmp/fail2ban.log" >> .env
+          echo "FAIL2BAN_LOG_PATH=/tmp/fail2ban.log" >> $GITHUB_ENV
 
       - name: Levantar servicios
         run: docker compose up -d --build
