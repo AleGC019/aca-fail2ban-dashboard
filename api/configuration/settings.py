@@ -6,12 +6,17 @@ from services.loki import query_loki
 from typing import List, Optional
 
 
+# Load environment variables first
 def load_env_or_fail():
     load_dotenv()
     if not os.getenv("LOKI_QUERY_URL"):
         raise RuntimeError("La variable LOKI_QUERY_URL no está configurada")
 
 
+# Call the function to load environment variables
+load_env_or_fail()
+
+# Define configuration constants
 LOKI_QUERY_URL = os.getenv("LOKI_QUERY_URL")
 FAIL2BAN_SOCKET_PATH = "/var/run/fail2ban/fail2ban.sock"
 
