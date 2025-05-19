@@ -20,7 +20,7 @@ jobs:
           pip install ruff
 
       - name: Ejecutar Ruff (linter Python)
-        run: ruff api/
+        run: ruff check api/
 
   build:
     name: Fase 2 - Build de contenedores
