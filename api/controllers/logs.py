@@ -10,10 +10,10 @@ import asyncio
 
 import time
 import re
-from typing import List, Optional # Añadido Optional para claridad si se usa
+from typing import Optional # Añadido Optional para claridad si se usa
 from datetime import datetime
 import math
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 # Importaciones necesarias que podrían faltar según el contexto completo
 # Asegúrate de que estas u otras dependencias necesarias estén aquí si las usas en otras partes del archivo
