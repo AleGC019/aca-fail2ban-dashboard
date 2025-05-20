@@ -1,6 +1,3 @@
-# Carga variables de entorno y valida LOKI_QUERY_URL
-load_env_or_fail()
-
 import os  # Para construir rutas de directorios
 from datetime import datetime  # Para el año en el footer
 from fastapi import FastAPI, Request  # 'Request' es necesario para las plantillas
@@ -12,6 +9,9 @@ from fastapi.responses import HTMLResponse  # Para el tipo de respuesta
 # Tus importaciones existentes
 from controllers import logs, jails
 from configuration.settings import load_env_or_fail, router as settings_router
+
+# Carga variables de entorno y valida LOKI_QUERY_URL
+load_env_or_fail()
 
 # --- Define la ruta base del directorio de la API ---
 # __file__ se refiere a este archivo (main.py)
