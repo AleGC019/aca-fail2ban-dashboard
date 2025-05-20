@@ -334,78 +334,90 @@ async def get_stats(
     if end is None:
         end = now
     if start is None:
-        start = end - 86400  # 24h por defecto
+        start = end - 86400  # últimos 24h
 
     window = end - start
     prev_start = start - window
     prev_end = start
 
-    def build_query_range(s, e):
-        return {
-            "query": f'{{job="{service}"}}',
-            "limit": 1000,
-            "direction": "backward",
+    async def query_count_over_time(expr: str, s: int, e: int) -> int:
+        params = {
+            "query": f'count_over_time({expr} [{window}s])',
             "start": str(s * 1_000_000_000),
             "end": str(e * 1_000_000_000),
+            "step": str(window)
         }
-
-    async def fetch_logs(query_params):
         async with AsyncClient() as client:
             try:
-                response = await client.get(settings.LOKI_QUERY_URL, params=query_params, timeout=10.0)
-                response.raise_for_status()
-                return response.json().get("data", {}).get("result", [])
+                res = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=10.0)
+                res.raise_for_status()
+                results = res.json().get("data", {}).get("result", [])
+                if results and results[0]["values"]:
+                    return int(float(results[0]["values"][-1][1]))
+                return 0
             except (RequestError, HTTPStatusError) as exc:
                 raise HTTPException(status_code=503, detail=f"Error al contactar Loki: {str(exc)}")
 
-    def compute_kpis(entries):
-        failures = 0
-        bans = 0
-        unbans = 0
-        ip_set = set()
-
-        for stream in entries:
-            for _, line in stream.get("values", []):
-                if "Found" in line:
-                    failures += 1
-                if "Ban" in line and "Unban" not in line:
-                    bans += 1
-                if "Unban" in line:
-                    unbans += 1
-
-                ip_match = re.search(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", line)
-                if ip_match:
-                    ip_set.add(ip_match.group(0))
-
-        return {
-            "failures": failures,
-            "bans": bans,
-            "ips": len(ip_set),
-            "active_bans": bans - unbans
+    async def query_ips(expr: str, s: int, e: int) -> int:
+        """Extrae IPs únicas del log crudo, porque Loki no tiene distinct."""
+        params = {
+            "query": expr,
+            "start": str(s * 1_000_000_000),
+            "end": str(e * 1_000_000_000),
+            "limit": 1000,
+            "direction": "backward",
         }
+        async with AsyncClient() as client:
+            try:
+                res = await client.get("http://localhost:3100/loki/api/v1/query", params=params, timeout=10.0)
+                res.raise_for_status()
+                results = res.json().get("data", {}).get("result", [])
+                ip_set = set()
+                for stream in results:
+                    for ts, line in stream.get("values", []):
+                        match = re.search(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", line)
+                        if match:
+                            ip_set.add(match.group(0))
+                return len(ip_set)
+            except (RequestError, HTTPStatusError) as exc:
+                raise HTTPException(status_code=503, detail=f"Error al extraer IPs: {str(exc)}")
 
-    def with_delta(current, previous):
-        def pct(a, b):
-            return round(((a - b) / b * 100), 2) if b > 0 else None
+    def with_delta(current: int, previous: int):
+        if previous == 0:
+            return { "value": current, "deltaPct": None }
+        delta = round(((current - previous) / previous) * 100, 2)
+        return { "value": current, "deltaPct": delta }
 
-        return {
-            "totalFailures": { "value": current["failures"], "deltaPct": pct(current["failures"], previous["failures"]) },
-            "totalBans":     { "value": current["bans"],     "deltaPct": pct(current["bans"],     previous["bans"]) },
-            "uniqueIPs":     { "value": current["ips"],      "deltaPct": pct(current["ips"],      previous["ips"]) },
-            "activeBans":    { "value": current["active_bans"], "deltaPct": pct(current["active_bans"], previous["active_bans"]) },
-        }
+    expr_base = f'{{job="{service}"}}'
 
-    # Fetch both windows
-    current_data = await fetch_logs(build_query_range(start, end))
-    previous_data = await fetch_logs(build_query_range(prev_start, prev_end))
+    # Ejecutar en paralelo
+    from asyncio import gather
 
-    # Process KPIs
-    current_stats = compute_kpis(current_data)
-    previous_stats = compute_kpis(previous_data)
+    current_failures, previous_failures, \
+    current_bans, previous_bans, \
+    current_unbans, previous_unbans, \
+    current_ips, previous_ips = await gather(
+        query_count_over_time(f'{expr_base} |= "Found"', start, end),
+        query_count_over_time(f'{expr_base} |= "Found"', prev_start, prev_end),
+        query_count_over_time(f'{expr_base} |= "Ban" != "Unban"', start, end),
+        query_count_over_time(f'{expr_base} |= "Ban" != "Unban"', prev_start, prev_end),
+        query_count_over_time(f'{expr_base} |= "Unban"', start, end),
+        query_count_over_time(f'{expr_base} |= "Unban"', prev_start, prev_end),
+        query_ips(expr_base, start, end),
+        query_ips(expr_base, prev_start, prev_end),
+    )
+
+    current_active_bans = current_bans - current_unbans
+    previous_active_bans = previous_bans - previous_unbans
 
     return {
-        "overview": with_delta(current_stats, previous_stats)
-}
+        "overview": {
+            "totalFailures": with_delta(current_failures, previous_failures),
+            "totalBans":     with_delta(current_bans, previous_bans),
+            "uniqueIPs":     with_delta(current_ips, previous_ips),
+            "activeBans":    with_delta(current_active_bans, previous_active_bans),
+        }
+    }
 
 # --- FIN: Código de la versión más completa de controllers/logs.py ---
 
