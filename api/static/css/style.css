@@ -1,0 +1,179 @@
+:root {
+    --font-family-primary: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+    --background-color: #f4f6f8;
+    --card-background-color: #ffffff;
+    --text-color-primary: #2d3748;
+    --text-color-secondary: #4a5568;
+    --text-color-footer: #718096;
+    --primary-color: #4299e1;
+    --primary-color-hover: #3182ce;
+    --secondary-color: #718096;
+    --secondary-color-hover: #4a5568;
+    --border-color: #e2e8f0;
+    --card-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.07), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    --border-radius: 0.75rem;
+}
+
+html {
+    box-sizing: border-box;
+    font-size: 16px;
+}
+
+*, *::before, *::after {
+    box-sizing: inherit;
+}
+
+body {
+    font-family: var(--font-family-primary);
+    margin: 0;
+    background-color: var(--background-color);
+    color: var(--text-color-primary);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    padding: 20px;
+    line-height: 1.65;
+    transition: background 0.2s;
+}
+
+.card {
+    background-color: var(--card-background-color);
+    padding: 2.5rem 2.8rem;
+    border-radius: var(--border-radius);
+    box-shadow: var(--card-shadow);
+    max-width: 700px;
+    width: 100%;
+    text-align: center;
+    border: 1px solid var(--border-color);
+    transition: box-shadow 0.2s;
+}
+
+.card-header {
+    margin-bottom: 1.5rem;
+}
+
+.logo {
+    width: 50px;
+    height: auto;
+    margin-bottom: 10px;
+}
+
+.card-header h1 {
+    color: var(--text-color-primary);
+    font-size: 2.2rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+    letter-spacing: -1px;
+}
+
+.card-content .description {
+    font-size: 1.08rem;
+    color: var(--text-color-secondary);
+    margin-bottom: 1.25rem;
+    max-width: 580px;
+    margin-left: auto;
+    margin-right: auto;
+    line-height: 1.7;
+}
+
+.documentation-links {
+    margin-top: 2rem;
+    margin-bottom: 1.2rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 15px;
+    width: 100%;
+}
+
+.btn {
+    display: inline-block;
+    color: #fff;
+    padding: 0.75rem 2rem;
+    text-decoration: none;
+    border-radius: 0.5rem;
+    font-weight: 500;
+    font-size: 1rem;
+    transition: background-color 0.2s, transform 0.15s, box-shadow 0.2s;
+    min-width: 220px;
+    border: none;
+    cursor: pointer;
+    text-align: center;
+    box-shadow: 0 2px 8px rgba(66,153,225,0.08);
+    outline: none;
+}
+
+.btn-primary {
+    background-color: var(--primary-color);
+}
+.btn-primary:hover, .btn-primary:focus {
+    background-color: var(--primary-color-hover);
+    transform: translateY(-2px) scale(1.03);
+    box-shadow: 0 6px 18px rgba(66,153,225,0.13);
+}
+
+.btn-secondary {
+    background-color: var(--secondary-color);
+}
+.btn-secondary:hover, .btn-secondary:focus {
+    background-color: var(--secondary-color-hover);
+    transform: translateY(-2px) scale(1.03);
+    box-shadow: 0 6px 18px rgba(113,128,150,0.10);
+}
+
+.card-footer {
+    margin-top: 2.2rem;
+    padding-top: 1.2rem;
+    border-top: 1px solid var(--border-color);
+    font-size: 0.93em;
+    color: var(--text-color-footer);
+    letter-spacing: 0.01em;
+}
+
+/* Mejoras responsivas */
+@media (max-width: 800px) {
+    .card {
+        padding: 2rem 1.2rem;
+        max-width: 98vw;
+    }
+    .card-content .description {
+        font-size: 0.98rem;
+    }
+    .btn {
+        min-width: 160px;
+        font-size: 0.97rem;
+        padding: 0.7rem 1.2rem;
+    }
+}
+
+@media (max-width: 500px) {
+    .card {
+        padding: 1.2rem 0.5rem;
+    }
+    .card-header h1 {
+        font-size: 1.3rem;
+    }
+    .card-content .description {
+        font-size: 0.93rem;
+    }
+    .documentation-links {
+        gap: 10px;
+    }
+    .btn {
+        min-width: 120px;
+        font-size: 0.93rem;
+        padding: 0.6rem 0.7rem;
+    }
+}
+
+/* Botones lado a lado en pantallas grandes */
+@media (min-width: 640px) {
+    .documentation-links {
+        flex-direction: row;
+        justify-content: center;
+    }
+    .btn {
+        margin: 0 8px;
+    }
+}
