@@ -10,7 +10,9 @@ services:
       - .env
     volumes:
       - loki_data:${LOKI_STORAGE_PATH:-/loki}
-      - ./loki/config.yaml:/etc/loki/local-config.yaml:ro
+      - ./loki/config.yaml:/etc/loki/local-config.yaml:ro      
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     command:
       - "-config.expand-env=true"
       - "-config.file=/etc/loki/local-config.yaml"
@@ -24,7 +26,9 @@ services:
     volumes:
       - ./promtail/promtail.yaml:/etc/promtail/promtail.yaml:ro
       # FAIL2BAN_LOG_PATH debe ser la ruta absoluta en el HOST al log de fail2ban
-      - ${FAIL2BAN_LOG_PATH}:${FAIL2BAN_LOG_PATH}:ro 
+      - ${FAIL2BAN_LOG_PATH}:${FAIL2BAN_LOG_PATH}:ro
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro 
     command:
       - "-config.expand-env=true"
       - "-config.file=/etc/promtail/promtail.yaml"
@@ -48,6 +52,8 @@ services:
       # Asegúrate de que esta ruta es correcta para tu sistema host.
       # El socket debe ser escribible por el cliente para ban/unban.
       - /var/run/fail2ban/fail2ban.sock:/var/run/fail2ban/fail2ban.sock
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     restart: unless-stopped
 
 volumes:
