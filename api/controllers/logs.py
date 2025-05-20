@@ -79,11 +79,24 @@ async def websocket_fail2ban_logs(websocket: WebSocket):
                     level_match = re.search(r"]:\s*(\w+)", line)
                     level = level_match.group(1).upper() if level_match else "INFO"
 
+                    # Obtener el nivel de importancia
+
+                    level_importance_map = {
+                        "CRITICAL": "alta",
+                        "ERROR": "alta",
+                        "WARNING": "media",
+                        "INFO": "baja",
+                        "DEBUG": "baja"
+                    }
+
+                    importance = level_importance_map.get(level, "baja")
+
                     message_data = {
                         "timestamp": datetime.fromtimestamp(int(ts) / 1_000_000_000).strftime("%Y-%m-%d %H:%M:%S"),
                         "service": service,
                         "message": line,
                         "level": level,
+                        "importance": importance,
                     }
                     new_entries.append((int(ts), message_data))
 
@@ -254,6 +267,33 @@ async def get_filtered_logs(
             event_match = re.search(r"\] (Found|Processing|Total|Ban|Unban|Started|Stopped|Banned|Unbanned)", line)
             event_type = event_match.group(1) if event_match else "Unknown"
 
+            # Filtrar por nivel de log y texto libre
+
+            level_importance_map = {
+                "CRITICAL": "alta",
+                "ERROR": "alta",
+                "WARNING": "media",
+                "INFO": "baja",
+                "DEBUG": "baja"
+            }
+            event_importance_map = {
+                "Ban": "alta",
+                "Banned": "alta",
+                "Unban": "media",
+                "Unbanned": "media",
+                "Started": "baja",
+                "Stopped": "baja",
+                "Processing": "baja",
+                "Found": "baja",
+                "Total": "baja"
+            }
+
+            importance = level_importance_map.get(log_level, "baja")
+            if event_type in event_importance_map:
+                # Si el evento tiene mayor importancia, toma la más alta
+                importance = max(importance, event_importance_map[event_type], key=lambda x: ["baja", "media", "alta"].index(x))
+        
+
             all_values.append({
                 "date": readable_date,
                 "timestamp": readable_date,
@@ -261,7 +301,8 @@ async def get_filtered_logs(
                 "pid": pid,
                 "ip": ip,
                 "level": log_level,
-                "event_type": event_type,
+                "eventType": event_type,
+                "importance": importance,
                 "message": line.strip()
             })
 
@@ -283,6 +324,88 @@ async def get_filtered_logs(
         "values": paginated,
     }
 
+@router.get("/fail2ban/stats")
+async def get_stats(
+    start: Optional[int] = Query(None, description="Inicio del rango de tiempo (timestamp UNIX en segundos)."),
+    end: Optional[int] = Query(None, description="Fin del rango de tiempo (timestamp UNIX en segundos)."),
+    service: Optional[str] = Query("fail2ban", description="Etiqueta 'job' (por defecto: fail2ban)")
+):
+    now = int(time.time())
+    if end is None:
+        end = now
+    if start is None:
+        start = end - 86400  # 24h por defecto
+
+    window = end - start
+    prev_start = start - window
+    prev_end = start
+
+    def build_query_range(s, e):
+        return {
+            "query": f'{{job="{service}"}}',
+            "limit": 1000,
+            "direction": "backward",
+            "start": str(s * 1_000_000_000),
+            "end": str(e * 1_000_000_000),
+        }
+
+    async def fetch_logs(query_params):
+        async with AsyncClient() as client:
+            try:
+                response = await client.get(settings.LOKI_QUERY_URL, params=query_params, timeout=10.0)
+                response.raise_for_status()
+                return response.json().get("data", {}).get("result", [])
+            except (RequestError, HTTPStatusError) as exc:
+                raise HTTPException(status_code=503, detail=f"Error al contactar Loki: {str(exc)}")
+
+    def compute_kpis(entries):
+        failures = 0
+        bans = 0
+        unbans = 0
+        ip_set = set()
+
+        for stream in entries:
+            for _, line in stream.get("values", []):
+                if "Found" in line:
+                    failures += 1
+                if "Ban" in line and "Unban" not in line:
+                    bans += 1
+                if "Unban" in line:
+                    unbans += 1
+
+                ip_match = re.search(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", line)
+                if ip_match:
+                    ip_set.add(ip_match.group(0))
+
+        return {
+            "failures": failures,
+            "bans": bans,
+            "ips": len(ip_set),
+            "active_bans": bans - unbans
+        }
+
+    def with_delta(current, previous):
+        def pct(a, b):
+            return round(((a - b) / b * 100), 2) if b > 0 else None
+
+        return {
+            "totalFailures": { "value": current["failures"], "deltaPct": pct(current["failures"], previous["failures"]) },
+            "totalBans":     { "value": current["bans"],     "deltaPct": pct(current["bans"],     previous["bans"]) },
+            "uniqueIPs":     { "value": current["ips"],      "deltaPct": pct(current["ips"],      previous["ips"]) },
+            "activeBans":    { "value": current["active_bans"], "deltaPct": pct(current["active_bans"], previous["active_bans"]) },
+        }
+
+    # Fetch both windows
+    current_data = await fetch_logs(build_query_range(start, end))
+    previous_data = await fetch_logs(build_query_range(prev_start, prev_end))
+
+    # Process KPIs
+    current_stats = compute_kpis(current_data)
+    previous_stats = compute_kpis(previous_data)
+
+    return {
+        "overview": with_delta(current_stats, previous_stats)
+}
 
 # --- FIN: Código de la versión más completa de controllers/logs.py ---
 
