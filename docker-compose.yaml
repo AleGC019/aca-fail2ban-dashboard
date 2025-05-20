@@ -10,7 +10,7 @@ services:
       - .env
     volumes:
       - loki_data:${LOKI_STORAGE_PATH:-/loki}
-      - ./loki/config.yaml:/etc/loki/local-config.yaml:ro      
+      - ./loki/config.yaml:/etc/loki/local-config.yaml:ro
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
     command:
@@ -28,7 +28,7 @@ services:
       # FAIL2BAN_LOG_PATH debe ser la ruta absoluta en el HOST al log de fail2ban
       - ${FAIL2BAN_LOG_PATH}:${FAIL2BAN_LOG_PATH}:ro
       - /etc/localtime:/etc/localtime:ro
-      - /etc/timezone:/etc/timezone:ro 
+      - /etc/timezone:/etc/timezone:ro
     command:
       - "-config.expand-env=true"
       - "-config.file=/etc/promtail/promtail.yaml"
