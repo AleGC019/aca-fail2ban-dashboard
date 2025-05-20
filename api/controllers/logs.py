@@ -49,7 +49,7 @@ async def websocket_fail2ban_logs(websocket: WebSocket):
 
             async with AsyncClient() as client:
                 try:
-                    response = await client.get(settings().LOKI_QUERY_URL, params=params, timeout=10.0)
+                    response = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=10.0)
                     response.raise_for_status()
                 except (RequestError, HTTPStatusError) as exc:
                     try:
@@ -128,7 +128,7 @@ async def get_banned_ips(
 
     async with AsyncClient() as client:
         try:
-            response = await client.get(settings().LOKI_QUERY_URL, params=params, timeout=10.0)
+            response = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=10.0)
             response.raise_for_status()
         except (RequestError, HTTPStatusError) as exc:
             raise HTTPException(status_code=503, detail=f"Error al contactar Loki: {str(exc)}")
@@ -228,7 +228,7 @@ async def get_filtered_logs(
 
     async with AsyncClient() as client:
         try:
-            response = await client.get(settings().LOKI_QUERY_URL, params=params, timeout=10.0)
+            response = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=10.0)
             response.raise_for_status()
         except (RequestError, HTTPStatusError) as exc:
             raise HTTPException(status_code=503, detail=f"Error al contactar Loki: {str(exc)}")
