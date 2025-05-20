@@ -7,6 +7,7 @@ from httpx import AsyncClient, RequestError, HTTPStatusError
 from configuration.settings import LOKI_QUERY_URL
 # -------------------
 import asyncio
+
 import time
 import re
 from typing import List, Optional # Añadido Optional para claridad si se usa
@@ -98,6 +99,7 @@ router = APIRouter()
 #            await websocket.send_json({"error": f"Error inesperado del servidor: {str(e)}"})
 #        except Exception as final_send_exc:
 #            print(f"No se pudo enviar el mensaje de error final: {final_send_exc}")
+
 @router.websocket("/ws/fail2ban-logs")
 async def websocket_fail2ban_logs(websocket: WebSocket):
     await websocket.accept()

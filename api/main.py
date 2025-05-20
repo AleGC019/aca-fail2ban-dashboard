@@ -8,7 +8,7 @@ from fastapi.responses import HTMLResponse  # Para el tipo de respuesta
 
 # Tus importaciones existentes
 from controllers import logs, jails
-from configuration.settings import load_env_or_fail
+from configuration.settings import load_env_or_fail, router as settings_router
 
 # Carga variables de entorno y valida LOKI_QUERY_URL
 load_env_or_fail()
