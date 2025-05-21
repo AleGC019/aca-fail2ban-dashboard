@@ -42,18 +42,10 @@ async def websocket_fail2ban_logs_stream(websocket: WebSocket):
                         data = json.loads(message)
                         if "streams" in data and data["streams"]:
                             for stream in data["streams"]:
-                                # Parse labels string to dict
-                                labels_str = stream.get("labels", "{}")
-                                try:
-                                    labels = ast.literal_eval(labels_str.replace("=", ":"))
-                                except Exception:
-                                    labels = {}
+                                labels = stream.get("stream", {})
                                 service = labels.get("job", "desconocido")
 
-                                for entry in stream.get("entries", []):
-                                    ts = entry.get("ts")
-                                    line = entry.get("line", "")
-
+                                for ts, line in stream.get("values", []):
                                     level_match = re.search(r"]:\s*(\w+)", line)
                                     level = level_match.group(1).upper() if level_match else "INFO"
                                     level_importance_map = {
@@ -65,7 +57,7 @@ async def websocket_fail2ban_logs_stream(websocket: WebSocket):
                                     }
                                     importance = level_importance_map.get(level, "baja")
                                     try:
-                                        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                                        dt = datetime.fromtimestamp(int(ts) / 1_000_000_000)
                                         timestamp = dt.strftime("%Y-%m-%d %H:%M:%S")
                                     except Exception:
                                         timestamp = ts
@@ -79,7 +71,6 @@ async def websocket_fail2ban_logs_stream(websocket: WebSocket):
                                     }
                                     await websocket.send_json(message_data)
                         else:
-                            # Optionally send a heartbeat or info message
                             await websocket.send_json({"info": "No log streams received yet."})
                     except json.JSONDecodeError:
                         print(f"Failed to parse Loki message: {message}")
