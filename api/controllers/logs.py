@@ -5,6 +5,7 @@ from httpx import AsyncClient, RequestError, HTTPStatusError
 # --- CAMBIO AQUÍ ---
 # Se importa LOKI_QUERY_URL directamente, no 'settings'
 from configuration.settings import LOKI_QUERY_URL
+from configuration.settings import LOKI_WS_URL
 # -------------------
 import asyncio
 
@@ -13,6 +14,7 @@ import re
 from typing import List, Optional # Añadido Optional para claridad si se usa
 from datetime import datetime
 import math
+import json
 
 # Importaciones necesarias que podrían faltar según el contexto completo
 # Asegúrate de que estas u otras dependencias necesarias estén aquí si las usas en otras partes del archivo
@@ -179,6 +181,66 @@ async def websocket_fail2ban_logs(websocket: WebSocket):
         except Exception as final_send_exc:
             print(f"No se pudo enviar el mensaje de error final: {final_send_exc}")
 
+@router.websocket("/ws/fail2ban-logs-stream")
+async def websocket_fail2ban_logs_stream(websocket: WebSocket):
+    await websocket.accept()
+
+    try:
+        # Create a websocket connection to Loki's tail API
+        loki_ws = f"{LOKI_WS_URL}?query={{job=\"fail2ban\"}}"
+
+        async with AsyncClient() as client:
+            async with client.stream("GET", loki_ws) as ws:
+                async for message in ws.aiter_text():
+                    if not message:
+                        continue
+
+                    try:
+                        data = json.loads(message)
+
+                        # Handle Loki stream messages
+                        if "streams" in data:
+                            for stream in data["streams"]:
+                                labels = stream.get("labels", {})
+                                service = labels.get("job", "desconocido")
+
+                                for entry in stream.get("entries", []):
+                                    ts = entry.get("ts")
+                                    line = entry.get("line", "")
+
+                                    # Extract log level from the message
+                                    level_match = re.search(r"]:\s*(\w+)", line)
+                                    level = level_match.group(1).upper() if level_match else "INFO"
+
+                                    # Format timestamp to human-readable format
+                                    try:
+                                        # Parse Loki timestamp format (RFC3339)
+                                        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                                        timestamp = dt.strftime("%Y-%m-%d %H:%M:%S")
+                                    except:
+                                        timestamp = ts
+
+                                    message_data = {
+                                        "timestamp": timestamp,
+                                        "service": service,
+                                        "message": line,
+                                        "level": level
+                                    }
+
+                                    await websocket.send_json(message_data)
+                    except json.JSONDecodeError:
+                        print(f"Failed to parse Loki message: {message}")
+                    except Exception as e:
+                        print(f"Error processing Loki message: {str(e)}")
+
+    except WebSocketDisconnect:
+        print("Client disconnected")
+    except Exception as e:
+        print(f"Unexpected websocket error: {str(e)}")
+        try:
+            await websocket.send_json({"error": f"Server error: {str(e)}"})
+        except:
+            pass
 
 #@router.get("/fail2ban/banned-ips")
 #async def get_banned_ips(
