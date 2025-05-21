@@ -15,7 +15,6 @@ from datetime import datetime
 import math
 from datetime import timedelta
 import json
-import ast
 
 # Importaciones necesarias que podrían faltar según el contexto completo
 # Asegúrate de que estas u otras dependencias necesarias estén aquí si las usas en otras partes del archivo
@@ -26,6 +25,7 @@ router = APIRouter()
 
 
 # --- INICIO: Código de la versión más completa de controllers/logs.py ---
+python
 @router.websocket("/ws/fail2ban-logs-stream")
 async def websocket_fail2ban_logs_stream(websocket: WebSocket):
     await websocket.accept()
@@ -36,42 +36,28 @@ async def websocket_fail2ban_logs_stream(websocket: WebSocket):
                 async for message in ws.aiter_text():
                     if not message:
                         continue
-                    print("Received from Loki:", message)  # Debug
-
                     try:
                         data = json.loads(message)
+                        # Handle log streams
                         if "streams" in data and data["streams"]:
                             for stream in data["streams"]:
                                 labels = stream.get("stream", {})
-                                service = labels.get("job", "desconocido")
-
+                                service = labels.get("job", "unknown")
                                 for ts, line in stream.get("values", []):
-                                    level_match = re.search(r"]:\s*(\w+)", line)
-                                    level = level_match.group(1).upper() if level_match else "INFO"
-                                    level_importance_map = {
-                                        "CRITICAL": "alta",
-                                        "ERROR": "alta",
-                                        "WARNING": "media",
-                                        "INFO": "baja",
-                                        "DEBUG": "baja"
-                                    }
-                                    importance = level_importance_map.get(level, "baja")
                                     try:
                                         dt = datetime.fromtimestamp(int(ts) / 1_000_000_000)
                                         timestamp = dt.strftime("%Y-%m-%d %H:%M:%S")
                                     except Exception:
                                         timestamp = ts
-
-                                    message_data = {
+                                    await websocket.send_json({
                                         "timestamp": timestamp,
                                         "service": service,
                                         "message": line,
-                                        "level": level,
-                                        "importance": importance,
-                                    }
-                                    await websocket.send_json(message_data)
-                        else:
-                            await websocket.send_json({"info": "No log streams received yet."})
+                                        "labels": labels
+                                    })
+                        # Optionally handle dropped_entries if needed
+                        # else:
+                        #     await websocket.send_json({"info": "No log streams received yet."})
                     except json.JSONDecodeError:
                         print(f"Failed to parse Loki message: {message}")
                     except Exception as e:
