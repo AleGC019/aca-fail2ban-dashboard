@@ -15,6 +15,7 @@ from datetime import datetime
 import math
 from datetime import timedelta
 import json
+import ast
 
 # Importaciones necesarias que podrían faltar según el contexto completo
 # Asegúrate de que estas u otras dependencias necesarias estén aquí si las usas en otras partes del archivo
@@ -28,32 +29,33 @@ router = APIRouter()
 @router.websocket("/ws/fail2ban-logs-stream")
 async def websocket_fail2ban_logs_stream(websocket: WebSocket):
     await websocket.accept()
-
     try:
         loki_ws = f"{settings.LOKI_WS_URL}?query={{job=\"fail2ban\"}}"
-
         async with AsyncClient() as client:
             async with client.stream("GET", loki_ws) as ws:
                 async for message in ws.aiter_text():
                     if not message:
                         continue
+                    print("Received from Loki:", message)  # Debug
 
                     try:
                         data = json.loads(message)
-                        if "streams" in data:
+                        if "streams" in data and data["streams"]:
                             for stream in data["streams"]:
-                                labels = stream.get("labels", {})
+                                # Parse labels string to dict
+                                labels_str = stream.get("labels", "{}")
+                                try:
+                                    labels = ast.literal_eval(labels_str.replace("=", ":"))
+                                except Exception:
+                                    labels = {}
                                 service = labels.get("job", "desconocido")
 
                                 for entry in stream.get("entries", []):
                                     ts = entry.get("ts")
                                     line = entry.get("line", "")
 
-                                    # Extract log level
                                     level_match = re.search(r"]:\s*(\w+)", line)
                                     level = level_match.group(1).upper() if level_match else "INFO"
-
-                                    # Importance mapping
                                     level_importance_map = {
                                         "CRITICAL": "alta",
                                         "ERROR": "alta",
@@ -62,8 +64,6 @@ async def websocket_fail2ban_logs_stream(websocket: WebSocket):
                                         "DEBUG": "baja"
                                     }
                                     importance = level_importance_map.get(level, "baja")
-
-                                    # Format timestamp
                                     try:
                                         dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                                         timestamp = dt.strftime("%Y-%m-%d %H:%M:%S")
@@ -77,13 +77,14 @@ async def websocket_fail2ban_logs_stream(websocket: WebSocket):
                                         "level": level,
                                         "importance": importance,
                                     }
-
                                     await websocket.send_json(message_data)
+                        else:
+                            # Optionally send a heartbeat or info message
+                            await websocket.send_json({"info": "No log streams received yet."})
                     except json.JSONDecodeError:
                         print(f"Failed to parse Loki message: {message}")
                     except Exception as e:
                         print(f"Error processing Loki message: {str(e)}")
-
     except WebSocketDisconnect:
         print("Client disconnected")
     except Exception as e:
