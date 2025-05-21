@@ -16,7 +16,6 @@ import math
 from datetime import timedelta
 import websockets
 from urllib.parse import urlencode
-import json
 from starlette.websockets import WebSocketState
 
 # Importaciones necesarias que podrían faltar según el contexto completo
@@ -26,30 +25,28 @@ from starlette.websockets import WebSocketState
 
 router = APIRouter()
 
+
 # --- INICIO: Código de la versión más completa de controllers/logs.py ---
-@router.websocket("/ws/fail2ban-logs-stream")  # Tu ruta para el tail real de Loki
+@router.websocket("/ws/fail2ban-logs-stream") # Tu ruta para el tail real de Loki
 async def websocket_fail2ban_logs_stream(websocket: WebSocket,
                                          limit: int = Query(10, description="Líneas iniciales."),
-                                         start: Optional[int] = Query(None,
-                                                                      description="Timestamp UNIX en ns para inicio.")):  # 'start' aquí es el que pasas a Loki
+                                         start: Optional[int] = Query(None, description="Timestamp UNIX en ns para inicio.")):
     await websocket.accept()
-    client_host = websocket.client.host if websocket.client else "desconocido"
-    client_port = websocket.client.port if websocket.client else "desconocido"
+    client_host = websocket.client.host
+    client_port = websocket.client.port
     print(f"Cliente WebSocket {client_host}:{client_port} conectado a /ws/fail2ban-logs-stream")
 
-    logql_query = '{job="fail2ban"}'  # Query específico
+    logql_query = '{job="fail2ban"}' # Query específico
 
     query_params_dict = {"query": logql_query, "limit": str(limit)}
-    if start:  # Si el cliente proporciona un 'start' timestamp para Loki
+    if start:
         query_params_dict["start"] = str(start)
 
     # settings.LOKI_WS_URL debería ser algo como "ws://loki:3100/loki/api/v1/tail"
     loki_target_ws_url = f"{settings.LOKI_WS_URL}?{urlencode(query_params_dict)}"
 
     try:
-        # Usamos el subprotocolo que Loki espera para el streaming de JSON
-        async with websockets.connect(loki_target_ws_url,
-                                      subprotocols=["json. व्यासपी.લોકી.ગ્રાફના.com"]) as loki_ws_client:
+        async with websockets.connect(loki_target_ws_url) as loki_ws_client:
             print(f"Conectado al WebSocket de Loki: {loki_target_ws_url}")
 
             # Tarea para enviar mensajes del cliente API a Loki (generalmente no se usa para tail)
@@ -59,146 +56,71 @@ async def websocket_fail2ban_logs_stream(websocket: WebSocket,
                         data = await websocket.receive_text()
                         # En un tail simple, no se espera que el cliente envíe mucho,
                         # pero podrías implementar lógica aquí si es necesario.
-                        # await loki_ws_client.send(data) # Descomentar si necesitas enviar a Loki
-                        print(
-                            f"Proxy WS: Mensaje de cliente API {client_host}:{client_port} (no reenviado a Loki): {data}")
+                        # await loki_ws_client.send(data)
+                        print(f"Mensaje de cliente API (no reenviado a Loki): {data}")
                 except WebSocketDisconnect:
-                    print(f"Proxy WS: Cliente API {client_host}:{client_port} desconectado (en client_to_loki_task).")
-                except websockets.exceptions.ConnectionClosed:  # La conexión a Loki ya fue cerrada por la otra tarea
-                    print(
-                        f"Proxy WS: Conexión a Loki cerrada, terminando client_to_loki_task para {client_host}:{client_port}.")
-                    pass
-                except Exception as e_c2l:  # Cualquier otra excepción en esta tarea
-                    print(
-                        f"Proxy WS: Error inesperado en client_to_loki_task para {client_host}:{client_port}: {type(e_c2l).__name__} {e_c2l}")
+                    print(f"Cliente API {client_host}:{client_port} desconectado (en client_to_loki_task).")
+                    # No necesitamos cerrar loki_ws_client aquí explícitamente si la otra tarea lo hace
+                except websockets.exceptions.ConnectionClosed:
+                    pass # La conexión a Loki ya fue cerrada por la otra tarea
 
-            # Tarea para enviar mensajes de Loki al cliente API (tu frontend)
+            # Tarea para enviar mensajes de Loki al cliente API
             async def loki_to_client_task():
                 try:
-                    async for message_from_loki_str in loki_ws_client:
-                        # message_from_loki_str es una cadena JSON de Loki
-                        # Aquí es donde aplicarías el formato de timestamp y el mapeo de importancia
-                        try:
-                            loki_data_batch = json.loads(message_from_loki_str)
-                            if "streams" in loki_data_batch:
-                                for stream in loki_data_batch["streams"]:
-                                    labels = stream.get("stream", {})
-                                    service = labels.get("job", "desconocido")
-                                    level_from_labels = labels.get("level", "INFO")
-
-                                    for ts_str, line_content in stream.get("values", []):
-                                        try:
-                                            timestamp_dt = datetime.fromtimestamp(int(ts_str) / 1_000_000_000)
-                                            formatted_timestamp = timestamp_dt.strftime("%Y-%m-%d %H:%M:%S")
-                                        except Exception:
-                                            formatted_timestamp = ts_str
-
-                                        level_importance_map = {
-                                            "CRITICAL": "alta", "ERROR": "alta",
-                                            "WARNING": "media", "NOTICE": "media",
-                                            "INFO": "baja", "DEBUG": "baja"
-                                        }
-                                        importance = level_importance_map.get(level_from_labels.upper(), "baja")
-
-                                        client_message = {
-                                            "timestamp": formatted_timestamp,
-                                            "service": service,
-                                            "message": line_content,
-                                            "level": level_from_labels,
-                                            "importance": importance,
-                                            "raw_labels": labels
-                                        }
-                                        await websocket.send_json(client_message)
-                        except json.JSONDecodeError:
-                            print(
-                                f"Proxy WS: No se pudo parsear mensaje JSON de Loki: {message_from_loki_str[:200]}...")
-                            # Si no se puede parsear, podrías enviar el texto crudo o un mensaje de error
-                            # await websocket.send_text(message_from_loki_str) # Opción: enviar crudo
-                        except WebSocketDisconnect:  # Si nuestro cliente API se desconecta mientras procesamos
-                            print(
-                                f"Proxy WS: Cliente API {client_host}:{client_port} desconectado (procesando msg de Loki).")
-                            raise  # Re-lanzar para que la tarea principal termine y cierre loki_ws_client
-                        except Exception as e_proc:
-                            print(
-                                f"Proxy WS: Error procesando/enviando mensaje de Loki: {type(e_proc).__name__} - {e_proc}")
-                            # Considera si enviar un error al cliente aquí
-
+                    async for message_from_loki in loki_ws_client:
+                        # message_from_loki es una cadena JSON de Loki
+                        # Puedes procesarla o simplemente reenviarla
+                        await websocket.send_text(message_from_loki)
                 except websockets.exceptions.ConnectionClosedOK:
-                    print(f"Proxy WS: Conexión a Loki para {client_host}:{client_port} cerrada limpiamente por Loki.")
+                    print(f"Conexión a Loki para {client_host}:{client_port} cerrada limpiamente por Loki.")
                 except websockets.exceptions.ConnectionClosedError as e:
-                    print(
-                        f"Proxy WS: Conexión a Loki para {client_host}:{client_port} cerrada con error por Loki: {e.code} {e.reason}")
-                    if websocket.application_state != WebSocketState.DISCONNECTED:  # <--- USO DE WebSocketState
-                        await websocket.close(code=1011)  # Código genérico para error del servidor
-                except WebSocketDisconnect:  # Si nuestro cliente API se desconecta
-                    print(f"Proxy WS: Cliente API {client_host}:{client_port} desconectado (en loki_to_client_task).")
-                except Exception as e_l2c:  # Cualquier otra excepción en esta tarea
-                    print(
-                        f"Proxy WS: Error inesperado en loki_to_client_task para {client_host}:{client_port}: {type(e_l2c).__name__} - {e_l2c}")
-                    if websocket.application_state != WebSocketState.DISCONNECTED:  # <--- USO DE WebSocketState
-                        await websocket.close(code=1011)
+                    print(f"Conexión a Loki para {client_host}:{client_port} cerrada con error por Loki: {e}")
+                    await websocket.close(code=e.code) # Propagar el código de cierre si es posible
+                except WebSocketDisconnect: # Si nuestro cliente se desconecta mientras esperamos a Loki
+                    print(f"Cliente API {client_host}:{client_port} desconectado (en loki_to_client_task).")
 
-            # Ejecutar ambas tareas y esperar a que la primera termine (o falle)
-            task_l2c = asyncio.create_task(loki_to_client_task())
+
+            # Ejecutar ambas tareas. Si una termina (ej. por desconexión), la otra debería terminar también.
             task_c2l = asyncio.create_task(client_to_loki_task())
+            task_l2c = asyncio.create_task(loki_to_client_task())
 
             done, pending = await asyncio.wait(
-                [task_l2c, task_c2l],
+                [task_c2l, task_l2c],
                 return_when=asyncio.FIRST_COMPLETED
             )
 
-            for task_to_cancel in pending:
-                task_to_cancel.cancel()
-                try:
-                    await task_to_cancel  # Esperar a que la cancelación se complete
-                except asyncio.CancelledError:
-                    print(
-                        f"Proxy WS: Tarea pendiente {task_to_cancel.get_name()} cancelada limpiamente para {client_host}:{client_port}.")
-                except Exception as e_cancel:
-                    print(
-                        f"Proxy WS: Excepción al cancelar tarea pendiente {task_to_cancel.get_name()} para {client_host}:{client_port}: {type(e_cancel).__name__} - {e_cancel}")
+            for task in pending:
+                task.cancel() # Cancelar la tarea pendiente
 
-            for task_done in done:  # Re-propagar la excepción si una de las tareas 'done' falló
-                if task_done.exception():
-                    print(
-                        f"Proxy WS: Tarea {task_done.get_name()} para {client_host}:{client_port} finalizada con excepción: {task_done.exception()}")
-                    raise task_done.exception()
+            # Re-raise exception from completed tasks if any, to ensure proper cleanup/logging
+            for task in done:
+                if task.exception():
+                    raise task.exception()
 
-    # Manejo de excepciones para la conexión principal del endpoint con el cliente API o la conexión inicial a Loki
     except websockets.exceptions.InvalidURI:
         err_msg = f"Error: URI de WebSocket de Loki inválida: {loki_target_ws_url}"
         print(err_msg)
-        # --- CORRECCIÓN DE USO DE WebSocketState ---
-        if websocket.application_state != WebSocketState.DISCONNECTED:
-            await websocket.send_json({"error": err_msg, "type": "error_config"})
-    except websockets.exceptions.WebSocketException as e:
-        # Esto captura errores de conexión como ConnectionRefused, HandshakeError, etc., al intentar conectar a Loki.
-        err_msg = f"No se pudo conectar al WebSocket de Loki en {loki_target_ws_url}: {type(e).__name__} ({e.rc if hasattr(e, 'rc') else e.code if hasattr(e, 'code') else 'N/A'}) - {str(e)}"
+        await websocket.send_json({"error": err_msg})
+    except websockets.exceptions.WebSocketException as e: # Captura errores de conexión (ConnectionRefused, etc.)
+        err_msg = f"No se pudo conectar al WebSocket de Loki en {loki_target_ws_url}: {type(e).__name__} - {e}"
         print(err_msg)
-        # --- CORRECCIÓN DE USO DE WebSocketState ---
-        if websocket.application_state != WebSocketState.DISCONNECTED:
-            await websocket.send_json({"error": err_msg, "type": "error_backend_connection"})
+        await websocket.send_json({"error": err_msg})
     except WebSocketDisconnect:
-        print(f"Cliente WebSocket {client_host}:{client_port} desconectado de /ws/fail2ban-logs-stream.")
+        print(f"Cliente WebSocket {client_host}:{client_port} desconectado.")
     except Exception as e:
         err_msg = f"Error general en /ws/fail2ban-logs-stream para {client_host}:{client_port}: {type(e).__name__} - {e}"
         print(err_msg)
         try:
-            # --- LÍNEA PROBLEMÁTICA ORIGINAL Y SU CORRECCIÓN ---
-            if websocket.application_state != WebSocketState.DISCONNECTED:  # Ahora WebSocketState está definido
-                # --- FIN DE CORRECCIÓN ---
-                await websocket.send_json(
-                    {"error": "Error interno del servidor en el stream de logs.", "type": "error_server"})
+            if websocket.application_state != WebSocketState.DISCONNECTED: # type: ignore
+                await websocket.send_json({"error": "Error interno del servidor en el stream de logs."})
         except Exception as send_err:
             print(f"No se pudo enviar mensaje de error final al WebSocket: {send_err}")
     finally:
-        print(
-            f"Cerrando y limpiando conexión WebSocket para el cliente {client_host}:{client_port} en /ws/fail2ban-logs-stream")
-        # FastAPI/Uvicorn manejan el cierre del websocket del cliente (websocket) si la función del endpoint termina.
-        # El `async with websockets.connect(...)` asegura que loki_ws_client se cierre al salir de ese bloque.
-        # Si quieres ser explícito o necesitas un código de cierre específico para el cliente:
-        if websocket.application_state != WebSocketState.DISCONNECTED:
-            await websocket.close(code=1000)  # Cierre normal
+        print(f"Cerrando WebSocket para {client_host}:{client_port} en /ws/fail2ban-logs-stream")
+        # FastAPI/Uvicorn manejan el cierre del websocket del cliente si la función del endpoint termina
+        # o si hay una excepción no capturada dentro de la función del endpoint.
+        # Si la conexión a loki_ws_client se mantiene en un 'async with', se cerrará al salir del bloque.
+
 
 @router.websocket("/ws/fail2ban-logs")
 async def websocket_fail2ban_logs(websocket: WebSocket):
