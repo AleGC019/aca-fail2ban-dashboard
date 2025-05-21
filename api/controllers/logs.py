@@ -25,7 +25,6 @@ router = APIRouter()
 
 
 # --- INICIO: Código de la versión más completa de controllers/logs.py ---
-python
 @router.websocket("/ws/fail2ban-logs-stream")
 async def websocket_fail2ban_logs_stream(websocket: WebSocket):
     await websocket.accept()
