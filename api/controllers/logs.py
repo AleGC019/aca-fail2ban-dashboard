@@ -350,7 +350,7 @@ async def get_stats(
     if end is None:
         end = now
     if start is None:
-        start = end - 86400  # últimos 24h
+        start = end - 3600  # últimos 1h
 
     window = end - start
     prev_start = start - window
