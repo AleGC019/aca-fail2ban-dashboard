@@ -340,31 +340,44 @@ async def get_filtered_logs(
         "values": paginated,
     }
 
-@router.get("/fail2ban/stats")
+@router.get("/fail2ban/stats", summary="Fail2ban statistics overview", tags=["fail2ban"])
 async def get_stats(
-    start: Optional[int] = Query(None),
-    end: Optional[int] = Query(None),
-    service: Optional[str] = Query("fail2ban")
+    start: Optional[int] = Query(None, description="Start of time window (UNIX timestamp, seconds). Default: 1 hour ago."),
+    end: Optional[int] = Query(None, description="End of time window (UNIX timestamp, seconds). Default: now."),
+    service: Optional[str] = Query("fail2ban", description="Log 'job' label to filter (default: fail2ban)")
 ):
+    """
+    Returns statistics for Fail2ban events in the given time window, including:
+    - Total failures (Found)
+    - Total bans
+    - Unique IPs detected
+    - Active bans (bans - unbans)
+    Also returns percentage change (delta) compared to the previous window.
+    """
     now = int(time.time())
     if end is None:
         end = now
     if start is None:
         start = end - 3600
 
-    # Limita la ventana máxima
-    MAX_WINDOW = 3600
-    if end - start > MAX_WINDOW:
-        start = end - MAX_WINDOW
-
+    # Enforce window size limits
+    MIN_WINDOW = 60  # 1 minute
+    MAX_WINDOW = 3600  # 1 hour
     window = end - start
+    if window < MIN_WINDOW:
+        start = end - MIN_WINDOW
+        window = MIN_WINDOW
+    elif window > MAX_WINDOW:
+        start = end - MAX_WINDOW
+        window = MAX_WINDOW
+
     prev_start = start - window
     prev_end = start
 
+    # Correct f-string for Loki label selector
     expr_base = f'{{job="{service}"}}'
 
     async def quick_count(label: str, s: int, e: int) -> int:
-        """Usa Loki count_over_time para eventos."""
         params = {
             "query": f'count_over_time({expr_base} |= "{label}" [{window}s])',
             "start": str(s * 1_000_000_000),
@@ -381,67 +394,93 @@ async def get_stats(
                 return 0
             except Exception as exc:
                 print("Count error:", exc)
-                return 0
+                return None
 
     async def fast_ip_count(s: int, e: int) -> int:
-        """Cuenta IPs únicas sin sobrecargar Loki."""
+        # Try to use count_values_over_time for unique IPs if Loki supports it
         params = {
-            "query": f'{expr_base} |= "Found"',
+            "query": f'count_values_over_time("ip", {expr_base} |= "Found" | regexp "(?P<ip>\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b)" [{window}s])',
             "start": str(s * 1_000_000_000),
             "end": str(e * 1_000_000_000),
-            "limit": 500,
-            "direction": "backward"
+            "step": str(window)
         }
         async with AsyncClient() as client:
             try:
                 res = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=5.0)
                 res.raise_for_status()
-                results = res.json().get("data", {}).get("result", [])
-                ips = set()
-                for stream in results:
-                    for _, line in stream.get("values", []):
-                        match = re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", line)
-                        if match:
-                            ips.add(match.group(0))
-                return len(ips)
-            except Exception as exc:
-                print("IP count error:", exc)
+                data = res.json().get("data", {}).get("result", [])
+                if data and data[0]["values"]:
+                    # The value is the count of unique IPs
+                    return int(float(data[0]["values"][-1][1]))
                 return 0
+            except Exception as exc:
+                print("IP count error (count_values_over_time):", exc)
+                # Fallback to old method if not supported
+                params_fallback = {
+                    "query": f'{expr_base} |= "Found"',
+                    "start": str(s * 1_000_000_000),
+                    "end": str(e * 1_000_000_000),
+                    "limit": 500,
+                    "direction": "backward"
+                }
+                try:
+                    res = await client.get(settings.LOKI_QUERY_URL, params=params_fallback, timeout=5.0)
+                    res.raise_for_status()
+                    results = res.json().get("data", {}).get("result", [])
+                    ips = set()
+                    for stream in results:
+                        for _, line in stream.get("values", []):
+                            match = re.search(r"\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b", line)
+                            if match:
+                                ips.add(match.group(0))
+                    return len(ips)
+                except Exception as exc2:
+                    print("IP count error (fallback):", exc2)
+                    return None
 
     def with_delta(current: int, previous: int):
-        if previous == 0:
+        if current is None:
+            return {"value": None, "deltaPct": None}
+        if previous in (None, 0):
             return { "value": current, "deltaPct": None }
         delta = round(((current - previous) / previous) * 100, 2)
         return { "value": current, "deltaPct": delta }
 
-    # Ejecutar menos tareas en paralelo
-    current_failures, previous_failures, current_bans, previous_bans = await asyncio.gather(
+    # Run all queries in parallel
+    results = await asyncio.gather(
         quick_count("Found", start, end),
         quick_count("Found", prev_start, prev_end),
         quick_count("Ban", start, end),
         quick_count("Ban", prev_start, prev_end),
-    )
-
-    current_unbans, previous_unbans = await asyncio.gather(
         quick_count("Unban", start, end),
         quick_count("Unban", prev_start, prev_end),
-    )
-
-    current_ips, previous_ips = await asyncio.gather(
         fast_ip_count(start, end),
         fast_ip_count(prev_start, prev_end),
+        return_exceptions=True
     )
+    (
+        current_failures, previous_failures,
+        current_bans, previous_bans,
+        current_unbans, previous_unbans,
+        current_ips, previous_ips
+    ) = results
 
-    current_active_bans = current_bans - current_unbans
-    previous_active_bans = previous_bans - previous_unbans
+    # If any are None or exception, handle gracefully
+    def safe(val):
+        return val if isinstance(val, int) else None
+
+    current_active_bans = max(0, safe(current_bans) - safe(current_unbans)) if safe(current_bans) is not None and safe(current_unbans) is not None else None
+    previous_active_bans = max(0, safe(previous_bans) - safe(previous_unbans)) if safe(previous_bans) is not None and safe(previous_unbans) is not None else None
 
     return {
         "overview": {
-            "totalFailures": with_delta(current_failures, previous_failures),
-            "totalBans":     with_delta(current_bans, previous_bans),
-            "uniqueIPs":     with_delta(current_ips, previous_ips),
+            "totalFailures": with_delta(safe(current_failures), safe(previous_failures)),
+            "totalBans":     with_delta(safe(current_bans), safe(previous_bans)),
+            "uniqueIPs":     with_delta(safe(current_ips), safe(previous_ips)),
             "activeBans":    with_delta(current_active_bans, previous_active_bans),
-        }
+        },
+        "windowSeconds": window,
+        "note": "If any value is null, it means the query failed or is not supported by Loki."
     }
 
 
