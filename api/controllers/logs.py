@@ -17,6 +17,8 @@ from datetime import timedelta
 import websockets
 from urllib.parse import urlencode
 from starlette.websockets import WebSocketState
+from collections import defaultdict, Counter
+import json
 
 # Importaciones necesarias que podrían faltar según el contexto completo
 # Asegúrate de que estas u otras dependencias necesarias estén aquí si las usas en otras partes del archivo
@@ -27,7 +29,7 @@ router = APIRouter()
 
 
 # --- INICIO: Código de la versión más completa de controllers/logs.py ---
-@router.websocket("/ws/fail2ban-logs-stream")
+@router.websocket("/ws/fail2ban-logs")
 async def websocket_fail2ban_logs_stream(
     websocket: WebSocket,
     limit: int = Query(10, description="Líneas iniciales."),
@@ -122,7 +124,143 @@ async def websocket_fail2ban_logs_stream(
     finally:
         print(f"Cerrando WebSocket para {client_host}:{client_port} en /ws/fail2ban-logs-stream")
 
-@router.websocket("/ws/fail2ban-logs")
+# nueva version del websocket, con los nuevos parametros solicitados
+@router.websocket("/ws/fail2ban-logs-v2")
+async def websocket_fail2ban_logs_stream_v2(
+    websocket: WebSocket,
+    limit: int = Query(10, description="Líneas iniciales."),
+    start: Optional[int] = Query(None, description="Timestamp UNIX en ns para inicio.")
+):
+    await websocket.accept()
+    client_host = websocket.client.host
+    client_port = websocket.client.port
+    print(f"Cliente WebSocket {client_host}:{client_port} conectado a /ws/fail2ban-logs-stream")
+
+    logql_query = '{job="fail2ban"}'
+    query_params_dict = {"query": logql_query, "limit": str(limit)}
+    if start:
+        query_params_dict["start"] = str(start)
+    loki_target_ws_url = f"{settings.LOKI_WS_URL}?{urlencode(query_params_dict)}"
+
+    # Estructuras de datos para agregaciones
+    events_per_minute = defaultdict(lambda: {"Found": 0, "Ban": 0, "Unban": 0})
+    detections_per_minute = defaultdict(int)
+    ip_counts = Counter()
+    found_timestamps = {}  # {ip: datetime} para rastrear el último "Found"
+    time_diffs = []  # Lista de diferencias de tiempo entre "Found" y "Ban"
+    THRESHOLD_ATTEMPTS = 50  # Umbral para alertas
+
+    async def process_log_line(line, ts):
+        """Procesa una línea de log y actualiza las estructuras de datos."""
+        # Convertir timestamp de nanosegundos a datetime
+        try:
+            event_time = datetime.fromtimestamp(int(ts) / 1_000_000_000)
+            minute_key = event_time.strftime("%H:%M")
+        except Exception:
+            return  # Saltar si el timestamp es inválido
+
+        # Extraer tipo de evento e IP (ajusta la regex según tu formato de log)
+        match = re.search(r"(Found|Ban|Unban)\s+(\d+\.\d+\.\d+\.\d+)", line)
+        if match:
+            event_type, ip = match.groups()
+
+            # Actualizar conteos
+            events_per_minute[minute_key][event_type] += 1
+            if event_type == "Found":
+                detections_per_minute[minute_key] += 1
+                ip_counts[ip] += 1
+                found_timestamps[ip] = event_time
+            elif event_type == "Ban" and ip in found_timestamps:
+                found_time = found_timestamps[ip]
+                time_diff = (event_time - found_time).total_seconds()
+                time_diffs.append(time_diff)
+                del found_timestamps[ip]  # Eliminar tras calcular
+
+    async def send_aggregated_data():
+        """Envía datos agregados cada 5 segundos."""
+        while True:
+            await asyncio.sleep(5)
+            data = {
+                "ban_unban_per_minute": [
+                    {"minute": minute, "ban": counts["Ban"], "unban": counts["Unban"]}
+                    for minute, counts in events_per_minute.items()
+                ],
+                "detections_per_minute": [
+                    {"minute": minute, "count": count}
+                    for minute, count in detections_per_minute.items()
+                ],
+                "top_ips": [
+                    {"ip": ip, "detections": count}
+                    for ip, count in ip_counts.most_common(5)
+                ],
+                "avg_detect_to_ban_sec": (
+                    sum(time_diffs) / len(time_diffs) if time_diffs else 0
+                ),
+                "alerts": [
+                    {"ip": ip, "attempts": count}
+                    for ip, count in ip_counts.items() if count >= THRESHOLD_ATTEMPTS
+                ]
+            }
+            try:
+                await websocket.send_json(data)
+            except WebSocketDisconnect:
+                break
+
+    try:
+        async with websockets.connect(loki_target_ws_url) as loki_ws_client:
+            print(f"Conectado al WebSocket de Loki: {loki_target_ws_url}")
+
+            # Iniciar tarea para enviar datos agregados
+            send_task = asyncio.create_task(send_aggregated_data())
+
+            async def loki_to_client_task():
+                try:
+                    async for message_from_loki in loki_ws_client:
+                        data = json.loads(message_from_loki)
+                        if "streams" in data and data["streams"]:
+                            for stream in data["streams"]:
+                                for ts, line in stream.get("values", []):
+                                    await process_log_line(line, ts)
+                except websockets.exceptions.ConnectionClosedOK:
+                    print(f"Conexión a Loki para {client_host}:{client_port} cerrada limpiamente por Loki.")
+                except websockets.exceptions.ConnectionClosedError as e:
+                    print(f"Conexión a Loki para {client_host}:{client_port} cerrada con error por Loki: {e}")
+                    await websocket.close(code=e.code)
+                except WebSocketDisconnect:
+                    print(f"Cliente API {client_host}:{client_port} desconectado (en loki_to_client_task).")
+
+            task_l2c = asyncio.create_task(loki_to_client_task())
+            done, pending = await asyncio.wait(
+                [task_l2c, send_task], return_when=asyncio.FIRST_COMPLETED
+            )
+            for task in pending:
+                task.cancel()
+            for task in done:
+                if task.exception():
+                    raise task.exception()
+
+    except websockets.exceptions.InvalidURI:
+        err_msg = f"Error: URI de WebSocket de Loki inválida: {loki_target_ws_url}"
+        print(err_msg)
+        await websocket.send_json({"error": err_msg})
+    except websockets.exceptions.WebSocketException as e:
+        err_msg = f"No se pudo conectar al WebSocket de Loki en {loki_target_ws_url}: {type(e).__name__} - {e}"
+        print(err_msg)
+        await websocket.send_json({"error": err_msg})
+    except WebSocketDisconnect:
+        print(f"Cliente WebSocket {client_host}:{client_port} desconectado.")
+    except Exception as e:
+        err_msg = f"Error general en /ws/fail2ban-logs-stream para {client_host}:{client_port}: {type(e).__name__} - {e}"
+        print(err_msg)
+        try:
+            if websocket.application_state != WebSocketState.DISCONNECTED:
+                await websocket.send_json({"error": "Error interno del servidor en el stream de logs."})
+        except Exception as send_err:
+            print(f"No se pudo enviar mensaje de error final al WebSocket: {send_err}")
+    finally:
+        print(f"Cerrando WebSocket para {client_host}:{client_port} en /ws/fail2ban-logs-stream")
+
+@router.websocket("/ws/fail2ban-logs2")
 async def websocket_fail2ban_logs(websocket: WebSocket):
     await websocket.accept()
 
