@@ -1,5 +1,6 @@
 # controllers/logs.py
 
+from collections import defaultdict
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException
 from httpx import AsyncClient, RequestError, HTTPStatusError
 # --- CAMBIO AQUÍ ---
@@ -28,16 +29,19 @@ router = APIRouter()
 async def websocket_fail2ban_logs(websocket: WebSocket):
     await websocket.accept()
 
-    # Obtener timestamp de hace 24 horas (en nanosegundos)
-    start_time_ns = int((datetime.utcnow() - timedelta(hours=24)).timestamp() * 1_000_000_000)
+    start_time_ns = int((datetime.utcnow() - timedelta(hours=1)).timestamp() * 1_000_000_000)
     last_timestamp = None
-    first_query = True  # Para usar el timestamp inicial solo la primera vez
+    first_query = True
+
+    eventos_por_minuto = defaultdict(lambda: {"ban": 0, "unban": 0, "found": 0})
+    detecciones_por_ip = defaultdict(int)
+    tiempos_detect_ban = defaultdict(lambda: {"found": None, "ban": None})
 
     try:
         while True:
             params = {
                 "query": '{job="fail2ban"}',
-                "limit": 100,
+                "limit": 500,
                 "direction": "forward",
             }
 
@@ -52,75 +56,87 @@ async def websocket_fail2ban_logs(websocket: WebSocket):
                     response = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=10.0)
                     response.raise_for_status()
                 except (RequestError, HTTPStatusError) as exc:
-                    try:
-                        await websocket.send_json({"error": f"Error al contactar Loki: {str(exc)}"})
-                    except WebSocketDisconnect:
-                        break
-                    except Exception as send_exc:
-                        print(f"Error al enviar mensaje por websocket: {send_exc}")
-                        break
+                    await websocket.send_json({"error": f"Error al contactar Loki: {str(exc)}"})
                     await asyncio.sleep(5)
                     continue
 
-            data = response.json().get("data", {})
-            results = data.get("result", [])
+            results = response.json().get("data", {}).get("result", [])
 
-            new_entries = []
             for stream in results:
-                labels = stream.get("stream", {})
-                service = labels.get("job", "desconocido")
-
                 values = sorted(stream.get("values", []), key=lambda x: int(x[0]))
 
                 for ts, line in values:
                     if last_timestamp is None or int(ts) > int(last_timestamp):
                         last_timestamp = ts
 
-                    level_match = re.search(r"]:\s*(\w+)", line)
-                    level = level_match.group(1).upper() if level_match else "INFO"
+                    dt = datetime.fromtimestamp(int(ts) / 1_000_000_000)
+                    minute = dt.strftime("%H:%M")
 
-                    # Obtener el nivel de importancia
+                    event_type = ""
+                    if "Ban" in line:
+                        event_type = "ban"
+                    elif "Unban" in line:
+                        event_type = "unban"
+                    elif "Found" in line:
+                        event_type = "found"
 
-                    level_importance_map = {
-                        "CRITICAL": "alta",
-                        "ERROR": "alta",
-                        "WARNING": "media",
-                        "INFO": "baja",
-                        "DEBUG": "baja"
-                    }
+                    ip_match = re.search(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", line)
+                    ip = ip_match.group(0) if ip_match else None
 
-                    importance = level_importance_map.get(level, "baja")
+                    if event_type:
+                        eventos_por_minuto[minute][event_type] += 1
 
-                    message_data = {
-                        "timestamp": datetime.fromtimestamp(int(ts) / 1_000_000_000).strftime("%Y-%m-%d %H:%M:%S"),
-                        "service": service,
-                        "message": line,
-                        "level": level,
-                        "importance": importance,
-                    }
-                    new_entries.append((int(ts), message_data))
+                    if event_type == "found" and ip:
+                        detecciones_por_ip[ip] += 1
+                        tiempos_detect_ban[ip]["found"] = int(ts)
+                    elif event_type == "ban" and ip:
+                        tiempos_detect_ban[ip]["ban"] = int(ts)
 
-            new_entries.sort(key=lambda x: x[0], reverse=True)
+            # Cálculo de promedio entre detección y baneo
+            delays = []
+            for ip, t in tiempos_detect_ban.items():
+                if t["found"] and t["ban"]:
+                    diff = (t["ban"] - t["found"]) / 1_000_000_000
+                    if diff >= 0:
+                        delays.append(diff)
 
-            for _, message_data in new_entries:
-                try:
-                    await websocket.send_json(message_data)
-                except WebSocketDisconnect:
-                    print("Cliente desconectado mientras se enviaban mensajes.")
-                    return
-                except Exception as send_exc:
-                    print(f"Error al enviar mensaje por websocket: {send_exc}")
+            avg_delay = round(sum(delays) / len(delays), 2) if delays else 0.0
+
+            # Top 5 IPs
+            top_ips = sorted(detecciones_por_ip.items(), key=lambda x: x[1], reverse=True)[:5]
+            top_ip_data = [{"ip": ip, "detections": count} for ip, count in top_ips]
+
+            # Tendencia detecciones
+            deteccion_trend = [{"minute": m, "count": v["found"]} for m, v in sorted(eventos_por_minuto.items())]
+
+            # Ban/Unban por minuto
+            ban_unban = [{"minute": m, "ban": v["ban"], "unban": v["unban"]} for m, v in sorted(eventos_por_minuto.items())]
+
+            # Alertas
+            alertas = [{"ip": ip, "attempts": count} for ip, count in detecciones_por_ip.items() if count > 20]
+
+            resumen = {
+                "ban_unban_per_minute": ban_unban,
+                "detections_per_minute": deteccion_trend,
+                "top_ips": top_ip_data,
+                "avg_detect_to_ban_sec": avg_delay,
+                "alerts": alertas
+            }
+
+            try:
+                await websocket.send_json(resumen)
+            except WebSocketDisconnect:
+                print("Cliente desconectado.")
+                return
 
             await asyncio.sleep(5)
 
-    except WebSocketDisconnect:
-        print("Cliente desconectado.")
     except Exception as e:
-        print(f"Error inesperado en el websocket: {str(e)}")
+        print(f"Error en WebSocket: {str(e)}")
         try:
             await websocket.send_json({"error": f"Error inesperado del servidor: {str(e)}"})
-        except Exception as final_send_exc:
-            print(f"No se pudo enviar el mensaje de error final: {final_send_exc}")
+        except Exception:
+            pass
 
 
 @router.get("/fail2ban/banned-ips")
