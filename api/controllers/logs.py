@@ -1,5 +1,6 @@
 # controllers/logs.py
 
+from collections import defaultdict
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException
 from httpx import AsyncClient, RequestError, HTTPStatusError
 # --- CAMBIO AQUÍ ---
@@ -264,16 +265,19 @@ async def websocket_fail2ban_logs_stream_v2(
 async def websocket_fail2ban_logs(websocket: WebSocket):
     await websocket.accept()
 
-    # Obtener timestamp de hace 24 horas (en nanosegundos)
-    start_time_ns = int((datetime.utcnow() - timedelta(hours=24)).timestamp() * 1_000_000_000)
+    start_time_ns = int((datetime.utcnow() - timedelta(hours=1)).timestamp() * 1_000_000_000)
     last_timestamp = None
-    first_query = True  # Para usar el timestamp inicial solo la primera vez
+    first_query = True
+
+    eventos_por_minuto = defaultdict(lambda: {"ban": 0, "unban": 0, "found": 0})
+    detecciones_por_ip = defaultdict(int)
+    tiempos_detect_ban = defaultdict(lambda: {"found": None, "ban": None})
 
     try:
         while True:
             params = {
                 "query": '{job="fail2ban"}',
-                "limit": 100,
+                "limit": 500,
                 "direction": "forward",
             }
 
@@ -288,75 +292,87 @@ async def websocket_fail2ban_logs(websocket: WebSocket):
                     response = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=10.0)
                     response.raise_for_status()
                 except (RequestError, HTTPStatusError) as exc:
-                    try:
-                        await websocket.send_json({"error": f"Error al contactar Loki: {str(exc)}"})
-                    except WebSocketDisconnect:
-                        break
-                    except Exception as send_exc:
-                        print(f"Error al enviar mensaje por websocket: {send_exc}")
-                        break
+                    await websocket.send_json({"error": f"Error al contactar Loki: {str(exc)}"})
                     await asyncio.sleep(5)
                     continue
 
-            data = response.json().get("data", {})
-            results = data.get("result", [])
+            results = response.json().get("data", {}).get("result", [])
 
-            new_entries = []
             for stream in results:
-                labels = stream.get("stream", {})
-                service = labels.get("job", "desconocido")
-
                 values = sorted(stream.get("values", []), key=lambda x: int(x[0]))
 
                 for ts, line in values:
                     if last_timestamp is None or int(ts) > int(last_timestamp):
                         last_timestamp = ts
 
-                    level_match = re.search(r"]:\s*(\w+)", line)
-                    level = level_match.group(1).upper() if level_match else "INFO"
+                    dt = datetime.fromtimestamp(int(ts) / 1_000_000_000)
+                    minute = dt.strftime("%H:%M")
 
-                    # Obtener el nivel de importancia
+                    event_type = ""
+                    if "Ban" in line:
+                        event_type = "ban"
+                    elif "Unban" in line:
+                        event_type = "unban"
+                    elif "Found" in line:
+                        event_type = "found"
 
-                    level_importance_map = {
-                        "CRITICAL": "alta",
-                        "ERROR": "alta",
-                        "WARNING": "media",
-                        "INFO": "baja",
-                        "DEBUG": "baja"
-                    }
+                    ip_match = re.search(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", line)
+                    ip = ip_match.group(0) if ip_match else None
 
-                    importance = level_importance_map.get(level, "baja")
+                    if event_type:
+                        eventos_por_minuto[minute][event_type] += 1
 
-                    message_data = {
-                        "timestamp": datetime.fromtimestamp(int(ts) / 1_000_000_000).strftime("%Y-%m-%d %H:%M:%S"),
-                        "service": service,
-                        "message": line,
-                        "level": level,
-                        "importance": importance,
-                    }
-                    new_entries.append((int(ts), message_data))
+                    if event_type == "found" and ip:
+                        detecciones_por_ip[ip] += 1
+                        tiempos_detect_ban[ip]["found"] = int(ts)
+                    elif event_type == "ban" and ip:
+                        tiempos_detect_ban[ip]["ban"] = int(ts)
 
-            new_entries.sort(key=lambda x: x[0], reverse=True)
+            # Cálculo de promedio entre detección y baneo
+            delays = []
+            for ip, t in tiempos_detect_ban.items():
+                if t["found"] and t["ban"]:
+                    diff = (t["ban"] - t["found"]) / 1_000_000_000
+                    if diff >= 0:
+                        delays.append(diff)
 
-            for _, message_data in new_entries:
-                try:
-                    await websocket.send_json(message_data)
-                except WebSocketDisconnect:
-                    print("Cliente desconectado mientras se enviaban mensajes.")
-                    return
-                except Exception as send_exc:
-                    print(f"Error al enviar mensaje por websocket: {send_exc}")
+            avg_delay = round(sum(delays) / len(delays), 2) if delays else 0.0
+
+            # Top 5 IPs
+            top_ips = sorted(detecciones_por_ip.items(), key=lambda x: x[1], reverse=True)[:5]
+            top_ip_data = [{"ip": ip, "detections": count} for ip, count in top_ips]
+
+            # Tendencia detecciones
+            deteccion_trend = [{"minute": m, "count": v["found"]} for m, v in sorted(eventos_por_minuto.items())]
+
+            # Ban/Unban por minuto
+            ban_unban = [{"minute": m, "ban": v["ban"], "unban": v["unban"]} for m, v in sorted(eventos_por_minuto.items())]
+
+            # Alertas
+            alertas = [{"ip": ip, "attempts": count} for ip, count in detecciones_por_ip.items() if count > 20]
+
+            resumen = {
+                "ban_unban_per_minute": ban_unban,
+                "detections_per_minute": deteccion_trend,
+                "top_ips": top_ip_data,
+                "avg_detect_to_ban_sec": avg_delay,
+                "alerts": alertas
+            }
+
+            try:
+                await websocket.send_json(resumen)
+            except WebSocketDisconnect:
+                print("Cliente desconectado.")
+                return
 
             await asyncio.sleep(5)
 
-    except WebSocketDisconnect:
-        print("Cliente desconectado.")
     except Exception as e:
-        print(f"Error inesperado en el websocket: {str(e)}")
+        print(f"Error en WebSocket: {str(e)}")
         try:
             await websocket.send_json({"error": f"Error inesperado del servidor: {str(e)}"})
-        except Exception as final_send_exc:
-            print(f"No se pudo enviar el mensaje de error final: {final_send_exc}")
+        except Exception:
+            pass
 
 
 @router.get("/fail2ban/banned-ips")
@@ -559,100 +575,147 @@ async def get_filtered_logs(
         "values": paginated,
     }
 
-
-@router.get("/fail2ban/stats")
+@router.get("/fail2ban/stats", summary="Fail2ban statistics overview", tags=["fail2ban"])
 async def get_stats(
-        start: Optional[int] = Query(None, description="Inicio del rango de tiempo (timestamp UNIX en segundos)."),
-        end: Optional[int] = Query(None, description="Fin del rango de tiempo (timestamp UNIX en segundos)."),
-        service: Optional[str] = Query("fail2ban", description="Etiqueta 'job' (por defecto: fail2ban)")
+    start: Optional[int] = Query(None, description="Start of time window (UNIX timestamp, seconds). Default: 1 hour ago."),
+    end: Optional[int] = Query(None, description="End of time window (UNIX timestamp, seconds). Default: now."),
+    service: Optional[str] = Query("fail2ban", description="Log 'job' label to filter (default: fail2ban)")
 ):
+    """
+    Returns statistics for Fail2ban events in the given time window, including:
+    - Total failures (Found)
+    - Total bans
+    - Unique IPs detected
+    - Active bans (bans - unbans)
+    Also returns percentage change (delta) compared to the previous window.
+    """
     now = int(time.time())
     if end is None:
         end = now
     if start is None:
-        start = end - 86400  # últimos 24h
+        start = end - 3600
 
+    # Enforce window size limits
+    MIN_WINDOW = 60  # 1 minute
+    MAX_WINDOW = 3600  # 1 hour
     window = end - start
+    if window < MIN_WINDOW:
+        start = end - MIN_WINDOW
+        window = MIN_WINDOW
+    elif window > MAX_WINDOW:
+        start = end - MAX_WINDOW
+        window = MAX_WINDOW
+
     prev_start = start - window
     prev_end = start
 
-    async def query_count_over_time(expr: str, s: int, e: int) -> int:
+    # Correct f-string for Loki label selector
+    expr_base = f'{{job="{service}"}}'
+
+    async def quick_count(label: str, s: int, e: int) -> int:
         params = {
-            "query": f'count_over_time({expr} [{window}s])',
+            "query": f'count_over_time({expr_base} |= "{label}" [{window}s])',
             "start": str(s * 1_000_000_000),
             "end": str(e * 1_000_000_000),
             "step": str(window)
         }
         async with AsyncClient() as client:
             try:
-                res = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=10.0)
+                res = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=5.0)
                 res.raise_for_status()
-                results = res.json().get("data", {}).get("result", [])
-                if results and results[0]["values"]:
-                    return int(float(results[0]["values"][-1][1]))
+                data = res.json().get("data", {}).get("result", [])
+                if data and data[0]["values"]:
+                    return int(float(data[0]["values"][-1][1]))
                 return 0
-            except (RequestError, HTTPStatusError) as exc:
-                raise HTTPException(status_code=503, detail=f"Error al contactar Loki: {str(exc)}")
+            except Exception as exc:
+                print("Count error:", exc)
+                return None
 
-    async def query_ips(expr: str, s: int, e: int) -> int:
-        """Extrae IPs únicas del log crudo, porque Loki no tiene distinct."""
+    async def fast_ip_count(s: int, e: int) -> int:
+        # Try to use count_values_over_time for unique IPs if Loki supports it
         params = {
-            "query": expr,
+            "query": f'count_values_over_time("ip", {expr_base} |= "Found" | regexp "(?P<ip>\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b)" [{window}s])',
             "start": str(s * 1_000_000_000),
             "end": str(e * 1_000_000_000),
-            "limit": 1000,
-            "direction": "backward",
+            "step": str(window)
         }
         async with AsyncClient() as client:
             try:
-                res = await client.get("http://localhost:3100/loki/api/v1/query", params=params, timeout=10.0)
+                res = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=5.0)
                 res.raise_for_status()
-                results = res.json().get("data", {}).get("result", [])
-                ip_set = set()
-                for stream in results:
-                    for ts, line in stream.get("values", []):
-                        match = re.search(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", line)
-                        if match:
-                            ip_set.add(match.group(0))
-                return len(ip_set)
-            except (RequestError, HTTPStatusError) as exc:
-                raise HTTPException(status_code=503, detail=f"Error al extraer IPs: {str(exc)}")
+                data = res.json().get("data", {}).get("result", [])
+                if data and data[0]["values"]:
+                    # The value is the count of unique IPs
+                    return int(float(data[0]["values"][-1][1]))
+                return 0
+            except Exception as exc:
+                print("IP count error (count_values_over_time):", exc)
+                # Fallback to old method if not supported
+                params_fallback = {
+                    "query": f'{expr_base} |= "Found"',
+                    "start": str(s * 1_000_000_000),
+                    "end": str(e * 1_000_000_000),
+                    "limit": 500,
+                    "direction": "backward"
+                }
+                try:
+                    res = await client.get(settings.LOKI_QUERY_URL, params=params_fallback, timeout=5.0)
+                    res.raise_for_status()
+                    results = res.json().get("data", {}).get("result", [])
+                    ips = set()
+                    for stream in results:
+                        for _, line in stream.get("values", []):
+                            match = re.search(r"\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b", line)
+                            if match:
+                                ips.add(match.group(0))
+                    return len(ips)
+                except Exception as exc2:
+                    print("IP count error (fallback):", exc2)
+                    return None
 
     def with_delta(current: int, previous: int):
-        if previous == 0:
-            return {"value": current, "deltaPct": None}
+        if current is None:
+            return {"value": None, "deltaPct": None}
+        if previous in (None, 0):
+            return { "value": current, "deltaPct": None }
         delta = round(((current - previous) / previous) * 100, 2)
         return {"value": current, "deltaPct": delta}
 
-    expr_base = f'{{job="{service}"}}'
-
-    # Ejecutar en paralelo
-    from asyncio import gather
-
-    current_failures, previous_failures, \
-        current_bans, previous_bans, \
-        current_unbans, previous_unbans, \
-        current_ips, previous_ips = await gather(
-        query_count_over_time(f'{expr_base} |= "Found"', start, end),
-        query_count_over_time(f'{expr_base} |= "Found"', prev_start, prev_end),
-        query_count_over_time(f'{expr_base} |= "Ban" != "Unban"', start, end),
-        query_count_over_time(f'{expr_base} |= "Ban" != "Unban"', prev_start, prev_end),
-        query_count_over_time(f'{expr_base} |= "Unban"', start, end),
-        query_count_over_time(f'{expr_base} |= "Unban"', prev_start, prev_end),
-        query_ips(expr_base, start, end),
-        query_ips(expr_base, prev_start, prev_end),
+    # Run all queries in parallel
+    results = await asyncio.gather(
+        quick_count("Found", start, end),
+        quick_count("Found", prev_start, prev_end),
+        quick_count("Ban", start, end),
+        quick_count("Ban", prev_start, prev_end),
+        quick_count("Unban", start, end),
+        quick_count("Unban", prev_start, prev_end),
+        fast_ip_count(start, end),
+        fast_ip_count(prev_start, prev_end),
+        return_exceptions=True
     )
+    (
+        current_failures, previous_failures,
+        current_bans, previous_bans,
+        current_unbans, previous_unbans,
+        current_ips, previous_ips
+    ) = results
 
-    current_active_bans = current_bans - current_unbans
-    previous_active_bans = previous_bans - previous_unbans
+    # If any are None or exception, handle gracefully
+    def safe(val):
+        return val if isinstance(val, int) else None
+
+    current_active_bans = max(0, safe(current_bans) - safe(current_unbans)) if safe(current_bans) is not None and safe(current_unbans) is not None else None
+    previous_active_bans = max(0, safe(previous_bans) - safe(previous_unbans)) if safe(previous_bans) is not None and safe(previous_unbans) is not None else None
 
     return {
         "overview": {
-            "totalFailures": with_delta(current_failures, previous_failures),
-            "totalBans": with_delta(current_bans, previous_bans),
-            "uniqueIPs": with_delta(current_ips, previous_ips),
-            "activeBans": with_delta(current_active_bans, previous_active_bans),
-        }
+            "totalFailures": with_delta(safe(current_failures), safe(previous_failures)),
+            "totalBans":     with_delta(safe(current_bans), safe(previous_bans)),
+            "uniqueIPs":     with_delta(safe(current_ips), safe(previous_ips)),
+            "activeBans":    with_delta(current_active_bans, previous_active_bans),
+        },
+        "windowSeconds": window,
+        "note": "If any value is null, it means the query failed or is not supported by Loki."
     }
 
 
