@@ -10,10 +10,13 @@ import asyncio
 
 import time
 import re
-from typing import Optional # Añadido Optional para claridad si se usa
+from typing import Optional  # Añadido Optional para claridad si se usa
 from datetime import datetime
 import math
 from datetime import timedelta
+import websockets
+from urllib.parse import urlencode
+from starlette.websockets import WebSocketState
 
 # Importaciones necesarias que podrían faltar según el contexto completo
 # Asegúrate de que estas u otras dependencias necesarias estén aquí si las usas en otras partes del archivo
@@ -22,7 +25,102 @@ from datetime import timedelta
 
 router = APIRouter()
 
+
 # --- INICIO: Código de la versión más completa de controllers/logs.py ---
+@router.websocket("/ws/fail2ban-logs-stream")
+async def websocket_fail2ban_logs_stream(
+    websocket: WebSocket,
+    limit: int = Query(10, description="Líneas iniciales."),
+    start: Optional[int] = Query(None, description="Timestamp UNIX en ns para inicio.")
+):
+    await websocket.accept()
+    client_host = websocket.client.host
+    client_port = websocket.client.port
+    print(f"Cliente WebSocket {client_host}:{client_port} conectado a /ws/fail2ban-logs-stream")
+
+    logql_query = '{job="fail2ban"}'
+    query_params_dict = {"query": logql_query, "limit": str(limit)}
+    if start:
+        query_params_dict["start"] = str(start)
+    loki_target_ws_url = f"{settings.LOKI_WS_URL}?{urlencode(query_params_dict)}"
+
+    try:
+        async with websockets.connect(loki_target_ws_url) as loki_ws_client:
+            print(f"Conectado al WebSocket de Loki: {loki_target_ws_url}")
+
+            async def loki_to_client_task():
+                try:
+                    async for message_from_loki in loki_ws_client:
+                        import json
+                        data = json.loads(message_from_loki)
+                        if "streams" in data and data["streams"]:
+                            for stream in data["streams"]:
+                                labels = stream.get("stream", {})
+                                service = labels.get("job", "desconocido")
+                                for ts, line in stream.get("values", []):
+                                    # Extract log level
+                                    import re
+                                    level_match = re.search(r"]:\s*(\w+)", line)
+                                    level = level_match.group(1).upper() if level_match else "INFO"
+                                    level_importance_map = {
+                                        "CRITICAL": "alta",
+                                        "ERROR": "alta",
+                                        "WARNING": "media",
+                                        "INFO": "baja",
+                                        "DEBUG": "baja"
+                                    }
+                                    importance = level_importance_map.get(level, "baja")
+                                    # Format timestamp
+                                    from datetime import datetime
+                                    try:
+                                        dt = datetime.fromtimestamp(int(ts) / 1_000_000_000)
+                                        timestamp = dt.strftime("%Y-%m-%d %H:%M:%S")
+                                    except Exception:
+                                        timestamp = ts
+                                    message_data = {
+                                        "timestamp": timestamp,
+                                        "service": service,
+                                        "message": line,
+                                        "level": level,
+                                        "importance": importance,
+                                    }
+                                    await websocket.send_json(message_data)
+                except websockets.exceptions.ConnectionClosedOK:
+                    print(f"Conexión a Loki para {client_host}:{client_port} cerrada limpiamente por Loki.")
+                except websockets.exceptions.ConnectionClosedError as e:
+                    print(f"Conexión a Loki para {client_host}:{client_port} cerrada con error por Loki: {e}")
+                    await websocket.close(code=e.code)
+                except WebSocketDisconnect:
+                    print(f"Cliente API {client_host}:{client_port} desconectado (en loki_to_client_task).")
+
+            task_l2c = asyncio.create_task(loki_to_client_task())
+            done, pending = await asyncio.wait([task_l2c], return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+            for task in done:
+                if task.exception():
+                    raise task.exception()
+
+    except websockets.exceptions.InvalidURI:
+        err_msg = f"Error: URI de WebSocket de Loki inválida: {loki_target_ws_url}"
+        print(err_msg)
+        await websocket.send_json({"error": err_msg})
+    except websockets.exceptions.WebSocketException as e:
+        err_msg = f"No se pudo conectar al WebSocket de Loki en {loki_target_ws_url}: {type(e).__name__} - {e}"
+        print(err_msg)
+        await websocket.send_json({"error": err_msg})
+    except WebSocketDisconnect:
+        print(f"Cliente WebSocket {client_host}:{client_port} desconectado.")
+    except Exception as e:
+        err_msg = f"Error general en /ws/fail2ban-logs-stream para {client_host}:{client_port}: {type(e).__name__} - {e}"
+        print(err_msg)
+        try:
+            if websocket.application_state != WebSocketState.DISCONNECTED:
+                await websocket.send_json({"error": "Error interno del servidor en el stream de logs."})
+        except Exception as send_err:
+            print(f"No se pudo enviar mensaje de error final al WebSocket: {send_err}")
+    finally:
+        print(f"Cerrando WebSocket para {client_host}:{client_port} en /ws/fail2ban-logs-stream")
 
 @router.websocket("/ws/fail2ban-logs")
 async def websocket_fail2ban_logs(websocket: WebSocket):
@@ -125,8 +223,8 @@ async def websocket_fail2ban_logs(websocket: WebSocket):
 
 @router.get("/fail2ban/banned-ips")
 async def get_banned_ips(
-    page: int = Query(0, ge=0, description="Número de página."),
-    size: int = Query(10, ge=1, le=100, description="Tamaño de página."),
+        page: int = Query(0, ge=0, description="Número de página."),
+        size: int = Query(10, ge=1, le=100, description="Tamaño de página."),
 ):
     # Últimas 24 horas en nanosegundos
     start_time_sec = int(time.time()) - 86400  # 86400 segundos = 24 horas
@@ -202,17 +300,16 @@ async def get_banned_ips(
     }
 
 
-
 # Ruta para obtener logs filtrados (similar a la función query_loki pero con más filtros)
 @router.get("/fail2ban/logs")
 async def get_filtered_logs(
-    page: int = Query(0, ge=0),
-    size: int = Query(10, ge=1, le=100),
-    start: Optional[int] = Query(None, description="Inicio del rango de tiempo (timestamp UNIX en segundos)."),
-    end: Optional[int] = Query(None, description="Fin del rango de tiempo (timestamp UNIX en segundos)."),
-    service: Optional[str] = Query(None, description="Filtrar por etiqueta 'job' (e.g., 'fail2ban')."),
-    level: Optional[str] = Query(None, description="Filtrar por nivel de log (buscar texto en el mensaje)."),
-    filter_text: Optional[str] = Query(None, description="Texto libre a buscar en el mensaje del log.")
+        page: int = Query(0, ge=0),
+        size: int = Query(10, ge=1, le=100),
+        start: Optional[int] = Query(None, description="Inicio del rango de tiempo (timestamp UNIX en segundos)."),
+        end: Optional[int] = Query(None, description="Fin del rango de tiempo (timestamp UNIX en segundos)."),
+        service: Optional[str] = Query(None, description="Filtrar por etiqueta 'job' (e.g., 'fail2ban')."),
+        level: Optional[str] = Query(None, description="Filtrar por nivel de log (buscar texto en el mensaje)."),
+        filter_text: Optional[str] = Query(None, description="Texto libre a buscar en el mensaje del log.")
 ):
     # Establecer valores por defecto si no se proporcionan
     now_sec = int(time.time())
@@ -291,8 +388,8 @@ async def get_filtered_logs(
             importance = level_importance_map.get(log_level, "baja")
             if event_type in event_importance_map:
                 # Si el evento tiene mayor importancia, toma la más alta
-                importance = max(importance, event_importance_map[event_type], key=lambda x: ["baja", "media", "alta"].index(x))
-        
+                importance = max(importance, event_importance_map[event_type],
+                                 key=lambda x: ["baja", "media", "alta"].index(x))
 
             all_values.append({
                 "date": readable_date,
@@ -324,11 +421,12 @@ async def get_filtered_logs(
         "values": paginated,
     }
 
+
 @router.get("/fail2ban/stats")
 async def get_stats(
-    start: Optional[int] = Query(None, description="Inicio del rango de tiempo (timestamp UNIX en segundos)."),
-    end: Optional[int] = Query(None, description="Fin del rango de tiempo (timestamp UNIX en segundos)."),
-    service: Optional[str] = Query("fail2ban", description="Etiqueta 'job' (por defecto: fail2ban)")
+        start: Optional[int] = Query(None, description="Inicio del rango de tiempo (timestamp UNIX en segundos)."),
+        end: Optional[int] = Query(None, description="Fin del rango de tiempo (timestamp UNIX en segundos)."),
+        service: Optional[str] = Query("fail2ban", description="Etiqueta 'job' (por defecto: fail2ban)")
 ):
     now = int(time.time())
     if end is None:
@@ -384,9 +482,9 @@ async def get_stats(
 
     def with_delta(current: int, previous: int):
         if previous == 0:
-            return { "value": current, "deltaPct": None }
+            return {"value": current, "deltaPct": None}
         delta = round(((current - previous) / previous) * 100, 2)
-        return { "value": current, "deltaPct": delta }
+        return {"value": current, "deltaPct": delta}
 
     expr_base = f'{{job="{service}"}}'
 
@@ -394,9 +492,9 @@ async def get_stats(
     from asyncio import gather
 
     current_failures, previous_failures, \
-    current_bans, previous_bans, \
-    current_unbans, previous_unbans, \
-    current_ips, previous_ips = await gather(
+        current_bans, previous_bans, \
+        current_unbans, previous_unbans, \
+        current_ips, previous_ips = await gather(
         query_count_over_time(f'{expr_base} |= "Found"', start, end),
         query_count_over_time(f'{expr_base} |= "Found"', prev_start, prev_end),
         query_count_over_time(f'{expr_base} |= "Ban" != "Unban"', start, end),
@@ -413,11 +511,12 @@ async def get_stats(
     return {
         "overview": {
             "totalFailures": with_delta(current_failures, previous_failures),
-            "totalBans":     with_delta(current_bans, previous_bans),
-            "uniqueIPs":     with_delta(current_ips, previous_ips),
-            "activeBans":    with_delta(current_active_bans, previous_active_bans),
+            "totalBans": with_delta(current_bans, previous_bans),
+            "uniqueIPs": with_delta(current_ips, previous_ips),
+            "activeBans": with_delta(current_active_bans, previous_active_bans),
         }
     }
+
 
 # --- FIN: Código de la versión más completa de controllers/logs.py ---
 
@@ -432,4 +531,3 @@ async def get_stats(
 @router.get("/health")
 async def health():
     return {"status": "ok", "message": "API de Logs y Gestión de Fail2ban funcionando"}
-

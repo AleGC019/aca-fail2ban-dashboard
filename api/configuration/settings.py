@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     LOKI_QUERY_URL: str = os.getenv(
         "LOKI_QUERY_URL", "http://loki:3100/loki/api/v1/query_range"
     )
+    LOKI_WS_URL: str = os.getenv(
+        "LOKI_WS_URL",
+        "ws://loki:3100/loki/api/v1/tail",
+    )
     FAIL2BAN_SOCKET_PATH: str = "/var/run/fail2ban/fail2ban.sock"
 
 
