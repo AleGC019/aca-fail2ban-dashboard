@@ -342,61 +342,71 @@ async def get_filtered_logs(
 
 @router.get("/fail2ban/stats")
 async def get_stats(
-    start: Optional[int] = Query(None, description="Inicio del rango de tiempo (timestamp UNIX en segundos)."),
-    end: Optional[int] = Query(None, description="Fin del rango de tiempo (timestamp UNIX en segundos)."),
-    service: Optional[str] = Query("fail2ban", description="Etiqueta 'job' (por defecto: fail2ban)")
+    start: Optional[int] = Query(None),
+    end: Optional[int] = Query(None),
+    service: Optional[str] = Query("fail2ban")
 ):
     now = int(time.time())
     if end is None:
         end = now
     if start is None:
-        start = end - 3600  # últimos 1h
+        start = end - 3600
+
+    # Limita la ventana máxima
+    MAX_WINDOW = 3600
+    if end - start > MAX_WINDOW:
+        start = end - MAX_WINDOW
 
     window = end - start
     prev_start = start - window
     prev_end = start
 
-    async def query_count_over_time(expr: str, s: int, e: int) -> int:
+    expr_base = f'{{job="{service}"}}'
+
+    async def quick_count(label: str, s: int, e: int) -> int:
+        """Usa Loki count_over_time para eventos."""
         params = {
-            "query": f'count_over_time({expr} [{window}s])',
+            "query": f'count_over_time({expr_base} |= "{label}" [{window}s])',
             "start": str(s * 1_000_000_000),
             "end": str(e * 1_000_000_000),
             "step": str(window)
         }
         async with AsyncClient() as client:
             try:
-                res = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=10.0)
+                res = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=5.0)
                 res.raise_for_status()
-                results = res.json().get("data", {}).get("result", [])
-                if results and results[0]["values"]:
-                    return int(float(results[0]["values"][-1][1]))
+                data = res.json().get("data", {}).get("result", [])
+                if data and data[0]["values"]:
+                    return int(float(data[0]["values"][-1][1]))
                 return 0
-            except (RequestError, HTTPStatusError) as exc:
-                raise HTTPException(status_code=503, detail=f"Error al contactar Loki: {str(exc)}")
+            except Exception as exc:
+                print("Count error:", exc)
+                return 0
 
-    async def query_ips(expr: str, s: int, e: int) -> int:
-        """Extrae IPs únicas del log crudo, porque Loki no tiene distinct."""
+    async def fast_ip_count(s: int, e: int) -> int:
+        """Cuenta IPs únicas sin sobrecargar Loki."""
         params = {
-            "query": expr,
+            "query": f'{expr_base} |= "Found"',
             "start": str(s * 1_000_000_000),
             "end": str(e * 1_000_000_000),
-            "limit": 1000,
-            "direction": "backward",
+            "limit": 500,
+            "direction": "backward"
         }
         async with AsyncClient() as client:
             try:
-                res = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=10.0)
+                res = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=5.0)
                 res.raise_for_status()
                 results = res.json().get("data", {}).get("result", [])
-                ip_set = set()
+                ips = set()
                 for stream in results:
-                    for ts, line in stream.get("values", []):
-                        match = re.search(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", line)
+                    for _, line in stream.get("values", []):
+                        match = re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", line)
                         if match:
-                            ip_set.add(match.group(0))
-                return len(ip_set)
-            except (RequestError, HTTPStatusError) as exc:
-                raise HTTPException(status_code=503, detail=f"Error al extraer IPs: {str(exc)}")
+                            ips.add(match.group(0))
+                return len(ips)
+            except Exception as exc:
+                print("IP count error:", exc)
+                return 0
 
     def with_delta(current: int, previous: int):
         if previous == 0:
@@ -404,23 +414,22 @@ async def get_stats(
         delta = round(((current - previous) / previous) * 100, 2)
         return { "value": current, "deltaPct": delta }
 
-    expr_base = f'{{job="{service}"}}'
+    # Ejecutar menos tareas en paralelo
+    current_failures, previous_failures, current_bans, previous_bans = await asyncio.gather(
+        quick_count("Found", start, end),
+        quick_count("Found", prev_start, prev_end),
+        quick_count("Ban", start, end),
+        quick_count("Ban", prev_start, prev_end),
+    )
 
-    # Ejecutar en paralelo
-    from asyncio import gather
+    current_unbans, previous_unbans = await asyncio.gather(
+        quick_count("Unban", start, end),
+        quick_count("Unban", prev_start, prev_end),
+    )
 
-    current_failures, previous_failures, \
-    current_bans, previous_bans, \
-    current_unbans, previous_unbans, \
-    current_ips, previous_ips = await gather(
-        query_count_over_time(f'{expr_base} |= "Found"', start, end),
-        query_count_over_time(f'{expr_base} |= "Found"', prev_start, prev_end),
-        query_count_over_time(f'{expr_base} |= "Ban" != "Unban"', start, end),
-        query_count_over_time(f'{expr_base} |= "Ban" != "Unban"', prev_start, prev_end),
-        query_count_over_time(f'{expr_base} |= "Unban"', start, end),
-        query_count_over_time(f'{expr_base} |= "Unban"', prev_start, prev_end),
-        query_ips(expr_base, start, end),
-        query_ips(expr_base, prev_start, prev_end),
+    current_ips, previous_ips = await asyncio.gather(
+        fast_ip_count(start, end),
+        fast_ip_count(prev_start, prev_end),
     )
 
     current_active_bans = current_bans - current_unbans
@@ -434,6 +443,7 @@ async def get_stats(
             "activeBans":    with_delta(current_active_bans, previous_active_bans),
         }
     }
+
 
 # --- FIN: Código de la versión más completa de controllers/logs.py ---
 
