@@ -29,9 +29,6 @@ scrape_configs:
           source: time
           format: "2006-01-02 15:04:05"
 
-      - json:
-          expressions: {} # No-op
-
       - match:
           selector: '{job="fail2ban"}'
           stages:
