@@ -369,7 +369,7 @@ async def get_stats(
         }
         async with AsyncClient() as client:
             try:
-                res = await client.get("http://localhost:3100/loki/api/v1/query", params=params, timeout=10.0)
+                res = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=10.0)
                 res.raise_for_status()
                 results = res.json().get("data", {}).get("result", [])
                 ip_set = set()
