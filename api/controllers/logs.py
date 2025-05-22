@@ -148,7 +148,7 @@ async def websocket_fail2ban_logs_stream_v2(
     ip_counts = Counter()
     found_timestamps = {}  # {ip: datetime} para rastrear el último "Found"
     time_diffs = []  # Lista de diferencias de tiempo entre "Found" y "Ban"
-    THRESHOLD_ATTEMPTS = 50  # Umbral para alertas
+    THRESHOLD_ATTEMPTS = 15  # Umbral para alertas
 
     async def process_log_line(line, ts):
         """Procesa una línea de log y actualiza las estructuras de datos."""
