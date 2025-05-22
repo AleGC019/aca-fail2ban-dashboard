@@ -126,7 +126,7 @@ async def websocket_fail2ban_logs_stream(
 
 # nueva version del websocket, con los nuevos parametros solicitados
 @router.websocket("/ws/fail2ban-logs-v2")
-async def websocket_fail2ban_logs_stream(
+async def websocket_fail2ban_logs_stream_v2(
     websocket: WebSocket,
     limit: int = Query(10, description="Líneas iniciales."),
     start: Optional[int] = Query(None, description="Timestamp UNIX en ns para inicio.")
