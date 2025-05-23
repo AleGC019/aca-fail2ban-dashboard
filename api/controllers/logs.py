@@ -371,9 +371,18 @@ async def get_filtered_logs(
 @router.get("/fail2ban/stats", summary="Fail2ban statistics overview")
 async def get_stats(
     start: Optional[int] = Query(None, description="Start of time window (UNIX timestamp, seconds). Default: 1 hour ago."),
-    end: Optional[int] = Query(None, description="End of time window (UNIX timestamp, seconds). Default: now."),
-    service: Optional[str] = Query("fail2ban", description="Log 'job' label to filter (default: fail2ban)")
+    end: Optional[int] = Query(None, description="End of time window (UNIX timestamp, seconds). Default: now.")
 ):
+    """
+    Retorna estadísticas de Fail2ban para un intervalo dado,
+    analizando los logs directamente para encontrar:
+    - Total failures (Found)
+    - Total bans (Ban)
+    - Unique IPs detectadas
+    - Active bans (Ban - Unban)
+    También calcula delta (%) comparado con el período anterior.
+    """
+
     now = int(time.time())
     if end is None:
         end = now
@@ -393,9 +402,13 @@ async def get_stats(
     prev_start = start - window
     prev_end = start
 
-    async def query_logs(s: int, e: int) -> list[str]:
+    # Regex para extraer IPs (IPv4)
+    ip_regex = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+
+    async def query_logs(s: int, e: int):
         params = {
-            "query": f'{{job="{service}"}} |= "Found" or |= "Ban" or |= "Unban"',
+            # Query para traer logs que contengan Found, Ban o Unban en cualquier parte del log
+            "query": 'Found or Ban or Unban',
             "start": str(s * 1_000_000_000),
             "end": str(e * 1_000_000_000),
             "limit": 10000,
@@ -406,63 +419,67 @@ async def get_stats(
                 res = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=10.0)
                 res.raise_for_status()
                 data = res.json().get("data", {}).get("result", [])
-                logs = []
-                for stream in data:
-                    for _, line in stream.get("values", []):
-                        logs.append(line)
-                return logs
+                return data
             except Exception as exc:
-                print("Error fetching logs:", exc)
-                return []
+                print(f"Error querying logs: {exc}")
+                return None
 
-    def parse_logs(logs: list[str]) -> tuple[int, int, int, int]:
-        total_failures = 0
-        total_bans = 0
-        total_unbans = 0
-        unique_ips = set()
+    def process_logs(data):
+        if not data:
+            return 0, 0, 0, 0  # failures, bans, unbans, unique_ips
 
-        for line in logs:
-            if "Found" in line:
-                total_failures += 1
-            elif "Ban" in line and not "Unban" in line:
-                total_bans += 1
-            elif "Unban" in line:
-                total_unbans += 1
+        failures = 0
+        bans = 0
+        unbans = 0
+        ips_set = set()
 
-            ip_match = re.search(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", line)
-            if ip_match:
-                unique_ips.add(ip_match.group(0))
+        for stream in data:
+            # Cada stream tiene "values": list of [timestamp, log_line]
+            for _, line in stream.get("values", []):
+                if "Found" in line:
+                    failures += 1
+                    # Extraer IPs únicas
+                    for ip in ip_regex.findall(line):
+                        ips_set.add(ip)
+                if "Ban" in line:
+                    bans += 1
+                if "Unban" in line:
+                    unbans += 1
 
-        return total_failures, total_bans, total_unbans, len(unique_ips)
+        unique_ips = len(ips_set)
+        return failures, bans, unbans, unique_ips
+
+    # Consultar logs en paralelo para ventana actual y anterior
+    results = await asyncio.gather(
+        query_logs(start, end),
+        query_logs(prev_start, prev_end),
+    )
+
+    current_data, previous_data = results
+
+    current_failures, current_bans, current_unbans, current_ips = process_logs(current_data)
+    prev_failures, prev_bans, prev_unbans, prev_ips = process_logs(previous_data)
 
     def with_delta(current: int, previous: int):
         if current is None:
             return {"value": None, "deltaPct": None}
         if previous in (None, 0):
-            return { "value": current, "deltaPct": None }
+            return {"value": current, "deltaPct": None}
         delta = round(((current - previous) / previous) * 100, 2)
         return {"value": current, "deltaPct": delta}
 
-    current_logs, previous_logs = await asyncio.gather(
-        query_logs(start, end),
-        query_logs(prev_start, prev_end),
-    )
-
-    curr_fail, curr_ban, curr_unban, curr_ips = parse_logs(current_logs)
-    prev_fail, prev_ban, prev_unban, prev_ips = parse_logs(previous_logs)
-
-    current_active_bans = max(0, curr_ban - curr_unban)
-    previous_active_bans = max(0, prev_ban - prev_unban)
+    current_active = max(0, current_bans - current_unbans)
+    previous_active = max(0, prev_bans - prev_unbans)
 
     return {
         "overview": {
-            "totalFailures": with_delta(curr_fail, prev_fail),
-            "totalBans":     with_delta(curr_ban, prev_ban),
-            "uniqueIPs":     with_delta(curr_ips, prev_ips),
-            "activeBans":    with_delta(current_active_bans, previous_active_bans),
+            "totalFailures": with_delta(current_failures, prev_failures),
+            "totalBans": with_delta(current_bans, prev_bans),
+            "uniqueIPs": with_delta(current_ips, prev_ips),
+            "activeBans": with_delta(current_active, previous_active),
         },
         "windowSeconds": window,
-        "note": "If any value is null, it means the query failed or logs were unavailable.",
+        "note": "If any value is null, it means the query failed or logs were unavailable."
     }
 
 
