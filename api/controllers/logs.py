@@ -370,69 +370,99 @@ async def get_filtered_logs(
 
 @router.get("/fail2ban/stats", summary="Fail2ban statistics overview")
 async def get_stats(
-    start: Optional[int] = Query(None, description="Inicio del rango de tiempo (timestamp UNIX en segundos)."),
-    end: Optional[int] = Query(None, description="Fin del rango de tiempo (timestamp UNIX en segundos)."),
-    service: Optional[str] = Query("fail2ban", description="Etiqueta 'job' para filtrar (por defecto: fail2ban)")
+    start: Optional[int] = Query(None, description="Start of time window (UNIX timestamp, seconds). Default: 1 hour ago."),
+    end: Optional[int] = Query(None, description="End of time window (UNIX timestamp, seconds). Default: now."),
+    service: Optional[str] = Query("fail2ban", description="Log 'job' label to filter (default: fail2ban)")
 ):
-    # Compilamos regex para IPs (IPv4) y los tipos de eventos
-    ip_regex = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-    found_regex = re.compile(r"\bfound\b", re.IGNORECASE)
-    ban_regex = re.compile(r"\bban\b", re.IGNORECASE)
-    unban_regex = re.compile(r"\bunban\b", re.IGNORECASE)
-
-    # Establecer valores por defecto si no se proporcionan
     now = int(time.time())
     if end is None:
         end = now
     if start is None:
         start = end - 3600
 
+    MIN_WINDOW = 60
+    MAX_WINDOW = 3600
+    window = end - start
+    if window < MIN_WINDOW:
+        start = end - MIN_WINDOW
+        window = MIN_WINDOW
+    elif window > MAX_WINDOW:
+        start = end - MAX_WINDOW
+        window = MAX_WINDOW
 
-    params = {
-        "query": '{job="fail2ban"} |~ "Found|Ban|Unban"',
-        "limit": 10000,
-        "direction": "forward",
-        "start": str(start * 1_000_000_000),
-        "end": str(end * 1_000_000_000),
-    }
+    prev_start = start - window
+    prev_end = start
 
-    async with AsyncClient() as client:
-        try:
-            response = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=10.0)
-            response.raise_for_status()
-        except (RequestError, HTTPStatusError) as exc:
-            raise HTTPException(status_code=503, detail=f"Error al contactar Loki: {str(exc)}")
+    async def query_logs(s: int, e: int) -> list[str]:
+        params = {
+            "query": f'{{job="{service}"}} |= "Found" or |= "Ban" or |= "Unban"',
+            "start": str(s * 1_000_000_000),
+            "end": str(e * 1_000_000_000),
+            "limit": 10000,
+            "direction": "forward"
+        }
+        async with AsyncClient() as client:
+            try:
+                res = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=10.0)
+                res.raise_for_status()
+                data = res.json().get("data", {}).get("result", [])
+                logs = []
+                for stream in data:
+                    for _, line in stream.get("values", []):
+                        logs.append(line)
+                return logs
+            except Exception as exc:
+                print("Error fetching logs:", exc)
+                return []
 
-    results = response.json().get("data", {}).get("result", [])
+    def parse_logs(logs: list[str]) -> tuple[int, int, int, int]:
+        total_failures = 0
+        total_bans = 0
+        total_unbans = 0
+        unique_ips = set()
 
-    failures = bans = unbans = 0
-    ip_set = set()
+        for line in logs:
+            if "Found" in line:
+                total_failures += 1
+            elif "Ban" in line and not "Unban" in line:
+                total_bans += 1
+            elif "Unban" in line:
+                total_unbans += 1
 
-    for entry in results:
-        values = entry.get("values", [])
-        for _, log_line in values:
-            # Extraer IP si existe
-            ip_match = ip_regex.search(log_line)
+            ip_match = re.search(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", line)
             if ip_match:
-                ip_set.add(ip_match.group(0))
+                unique_ips.add(ip_match.group(0))
 
-            # Buscar tipo de evento solo una vez
-            if found_regex.search(log_line):
-                failures += 1
-            elif unban_regex.search(log_line):
-                unbans += 1
-            elif ban_regex.search(log_line):
-                bans += 1
+        return total_failures, total_bans, total_unbans, len(unique_ips)
+
+    def with_delta(current: int, previous: int):
+        if current is None:
+            return {"value": None, "deltaPct": None}
+        if previous in (None, 0):
+            return { "value": current, "deltaPct": None }
+        delta = round(((current - previous) / previous) * 100, 2)
+        return {"value": current, "deltaPct": delta}
+
+    current_logs, previous_logs = await asyncio.gather(
+        query_logs(start, end),
+        query_logs(prev_start, prev_end),
+    )
+
+    curr_fail, curr_ban, curr_unban, curr_ips = parse_logs(current_logs)
+    prev_fail, prev_ban, prev_unban, prev_ips = parse_logs(previous_logs)
+
+    current_active_bans = max(0, curr_ban - curr_unban)
+    previous_active_bans = max(0, prev_ban - prev_unban)
 
     return {
         "overview": {
-            "totalFailures": {"value": failures, "deltaPct": None},
-            "totalBans": {"value": bans, "deltaPct": None},
-            "uniqueIPs": {"value": len(ip_set), "deltaPct": None},
-            "activeBans": {"value": bans - unbans, "deltaPct": None},
+            "totalFailures": with_delta(curr_fail, prev_fail),
+            "totalBans":     with_delta(curr_ban, prev_ban),
+            "uniqueIPs":     with_delta(curr_ips, prev_ips),
+            "activeBans":    with_delta(current_active_bans, previous_active_bans),
         },
-        "windowSeconds": end - start,
-        "note": "Análisis optimizado del contenido de logs sin uso de labels ni stream."
+        "windowSeconds": window,
+        "note": "If any value is null, it means the query failed or logs were unavailable.",
     }
 
 
