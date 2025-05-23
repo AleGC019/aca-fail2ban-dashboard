@@ -29,103 +29,9 @@ router = APIRouter()
 
 
 # --- INICIO: Código de la versión más completa de controllers/logs.py ---
-@router.websocket("/ws/fail2ban-logs")
-async def websocket_fail2ban_logs_stream(
-    websocket: WebSocket,
-    limit: int = Query(10, description="Líneas iniciales."),
-    start: Optional[int] = Query(None, description="Timestamp UNIX en ns para inicio.")
-):
-    await websocket.accept()
-    client_host = websocket.client.host
-    client_port = websocket.client.port
-    print(f"Cliente WebSocket {client_host}:{client_port} conectado a /ws/fail2ban-logs-stream")
-
-    logql_query = '{job="fail2ban"}'
-    query_params_dict = {"query": logql_query, "limit": str(limit)}
-    if start:
-        query_params_dict["start"] = str(start)
-    loki_target_ws_url = f"{settings.LOKI_WS_URL}?{urlencode(query_params_dict)}"
-
-    try:
-        async with websockets.connect(loki_target_ws_url) as loki_ws_client:
-            print(f"Conectado al WebSocket de Loki: {loki_target_ws_url}")
-
-            async def loki_to_client_task():
-                try:
-                    async for message_from_loki in loki_ws_client:
-                        import json
-                        data = json.loads(message_from_loki)
-                        if "streams" in data and data["streams"]:
-                            for stream in data["streams"]:
-                                labels = stream.get("stream", {})
-                                service = labels.get("job", "desconocido")
-                                for ts, line in stream.get("values", []):
-                                    # Extract log level
-                                    import re
-                                    level_match = re.search(r"]:\s*(\w+)", line)
-                                    level = level_match.group(1).upper() if level_match else "INFO"
-                                    level_importance_map = {
-                                        "CRITICAL": "alta",
-                                        "ERROR": "alta",
-                                        "WARNING": "media",
-                                        "INFO": "baja",
-                                        "DEBUG": "baja"
-                                    }
-                                    importance = level_importance_map.get(level, "baja")
-                                    # Format timestamp
-                                    from datetime import datetime
-                                    try:
-                                        dt = datetime.fromtimestamp(int(ts) / 1_000_000_000)
-                                        timestamp = dt.strftime("%Y-%m-%d %H:%M:%S")
-                                    except Exception:
-                                        timestamp = ts
-                                    message_data = {
-                                        "timestamp": timestamp,
-                                        "service": service,
-                                        "message": line,
-                                        "level": level,
-                                        "importance": importance,
-                                    }
-                                    await websocket.send_json(message_data)
-                except websockets.exceptions.ConnectionClosedOK:
-                    print(f"Conexión a Loki para {client_host}:{client_port} cerrada limpiamente por Loki.")
-                except websockets.exceptions.ConnectionClosedError as e:
-                    print(f"Conexión a Loki para {client_host}:{client_port} cerrada con error por Loki: {e}")
-                    await websocket.close(code=e.code)
-                except WebSocketDisconnect:
-                    print(f"Cliente API {client_host}:{client_port} desconectado (en loki_to_client_task).")
-
-            task_l2c = asyncio.create_task(loki_to_client_task())
-            done, pending = await asyncio.wait([task_l2c], return_when=asyncio.FIRST_COMPLETED)
-            for task in pending:
-                task.cancel()
-            for task in done:
-                if task.exception():
-                    raise task.exception()
-
-    except websockets.exceptions.InvalidURI:
-        err_msg = f"Error: URI de WebSocket de Loki inválida: {loki_target_ws_url}"
-        print(err_msg)
-        await websocket.send_json({"error": err_msg})
-    except websockets.exceptions.WebSocketException as e:
-        err_msg = f"No se pudo conectar al WebSocket de Loki en {loki_target_ws_url}: {type(e).__name__} - {e}"
-        print(err_msg)
-        await websocket.send_json({"error": err_msg})
-    except WebSocketDisconnect:
-        print(f"Cliente WebSocket {client_host}:{client_port} desconectado.")
-    except Exception as e:
-        err_msg = f"Error general en /ws/fail2ban-logs-stream para {client_host}:{client_port}: {type(e).__name__} - {e}"
-        print(err_msg)
-        try:
-            if websocket.application_state != WebSocketState.DISCONNECTED:
-                await websocket.send_json({"error": "Error interno del servidor en el stream de logs."})
-        except Exception as send_err:
-            print(f"No se pudo enviar mensaje de error final al WebSocket: {send_err}")
-    finally:
-        print(f"Cerrando WebSocket para {client_host}:{client_port} en /ws/fail2ban-logs-stream")
 
 # nueva version del websocket, con los nuevos parametros solicitados
-@router.websocket("/ws/fail2ban-logs-v2")
+@router.websocket("/ws/fail2ban-logs")
 async def websocket_fail2ban_logs_stream_v2(
     websocket: WebSocket,
     limit: int = Query(10, description="Líneas iniciales."),
@@ -259,104 +165,6 @@ async def websocket_fail2ban_logs_stream_v2(
             print(f"No se pudo enviar mensaje de error final al WebSocket: {send_err}")
     finally:
         print(f"Cerrando WebSocket para {client_host}:{client_port} en /ws/fail2ban-logs-stream")
-
-@router.websocket("/ws/fail2ban-logs2")
-async def websocket_fail2ban_logs(websocket: WebSocket):
-    await websocket.accept()
-
-    # Obtener timestamp de hace 24 horas (en nanosegundos)
-    start_time_ns = int((datetime.utcnow() - timedelta(hours=24)).timestamp() * 1_000_000_000)
-    last_timestamp = None
-    first_query = True  # Para usar el timestamp inicial solo la primera vez
-
-    try:
-        while True:
-            params = {
-                "query": '{job="fail2ban"}',
-                "limit": 100,
-                "direction": "forward",
-            }
-
-            if last_timestamp:
-                params["start"] = str(int(last_timestamp) + 1)
-            elif first_query:
-                params["start"] = str(start_time_ns)
-                first_query = False
-
-            async with AsyncClient() as client:
-                try:
-                    response = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=10.0)
-                    response.raise_for_status()
-                except (RequestError, HTTPStatusError) as exc:
-                    try:
-                        await websocket.send_json({"error": f"Error al contactar Loki: {str(exc)}"})
-                    except WebSocketDisconnect:
-                        break
-                    except Exception as send_exc:
-                        print(f"Error al enviar mensaje por websocket: {send_exc}")
-                        break
-                    await asyncio.sleep(5)
-                    continue
-
-            data = response.json().get("data", {})
-            results = data.get("result", [])
-
-            new_entries = []
-            for stream in results:
-                labels = stream.get("stream", {})
-                service = labels.get("job", "desconocido")
-
-                values = sorted(stream.get("values", []), key=lambda x: int(x[0]))
-
-                for ts, line in values:
-                    if last_timestamp is None or int(ts) > int(last_timestamp):
-                        last_timestamp = ts
-
-                    level_match = re.search(r"]:\s*(\w+)", line)
-                    level = level_match.group(1).upper() if level_match else "INFO"
-
-                    # Obtener el nivel de importancia
-
-                    level_importance_map = {
-                        "CRITICAL": "alta",
-                        "ERROR": "alta",
-                        "WARNING": "media",
-                        "INFO": "baja",
-                        "DEBUG": "baja"
-                    }
-
-                    importance = level_importance_map.get(level, "baja")
-
-                    message_data = {
-                        "timestamp": datetime.fromtimestamp(int(ts) / 1_000_000_000).strftime("%Y-%m-%d %H:%M:%S"),
-                        "service": service,
-                        "message": line,
-                        "level": level,
-                        "importance": importance,
-                    }
-                    new_entries.append((int(ts), message_data))
-
-            new_entries.sort(key=lambda x: x[0], reverse=True)
-
-            for _, message_data in new_entries:
-                try:
-                    await websocket.send_json(message_data)
-                except WebSocketDisconnect:
-                    print("Cliente desconectado mientras se enviaban mensajes.")
-                    return
-                except Exception as send_exc:
-                    print(f"Error al enviar mensaje por websocket: {send_exc}")
-
-            await asyncio.sleep(5)
-
-    except WebSocketDisconnect:
-        print("Cliente desconectado.")
-    except Exception as e:
-        print(f"Error inesperado en el websocket: {str(e)}")
-        try:
-            await websocket.send_json({"error": f"Error inesperado del servidor: {str(e)}"})
-        except Exception as final_send_exc:
-            print(f"No se pudo enviar el mensaje de error final: {final_send_exc}")
 
 
 @router.get("/fail2ban/banned-ips")
@@ -580,7 +388,7 @@ async def get_stats(
     if start is None:
         start = end - 3600
 
-    query = '{job="%s"} |= "Found" or |= "Ban" or |= "Unban"' % service
+    query = '{job="%s"} |~ "Found|Ban|Unban"' % service
 
     params = {
         "query": query,
