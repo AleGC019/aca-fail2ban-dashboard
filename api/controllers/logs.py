@@ -388,10 +388,9 @@ async def get_stats(
     if start is None:
         start = end - 3600
 
-    query = '{job="%s"} |~ "Found|Ban|Unban"' % service
 
     params = {
-        "query": query,
+        "query": '{job="fail2ban"} |~ "Found|Ban|Unban"',
         "limit": 10000,
         "direction": "forward",
         "start": str(start * 1_000_000_000),
