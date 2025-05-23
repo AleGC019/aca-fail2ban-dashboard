@@ -580,7 +580,7 @@ async def get_stats(
     if start is None:
         start = end - 3600
 
-    query = f'{{job="{service}"}}'
+    query = '{job="%s"} |= "Found" or |= "Ban" or |= "Unban"' % service
 
     params = {
         "query": query,
