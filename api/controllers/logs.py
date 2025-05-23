@@ -496,7 +496,7 @@ async def get_filtered_logs(
             ip_match = re.search(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", line)
             ip = ip_match.group(0) if ip_match else None
 
-            level_match = re.search(r"\b(INFO|DEBUG|WARNING|ERROR|CRITICAL)\b", line)
+            level_match = re.search(r"\b(INFO|DEBUG|WARNING|ERROR|CRITICAL|NOTICE)\b", line)
             log_level = level_match.group(1).upper() if level_match else "INFO"
 
             event_match = re.search(r"\] (Found|Processing|Total|Ban|Unban|Started|Stopped|Banned|Unbanned)", line)
@@ -508,6 +508,7 @@ async def get_filtered_logs(
                 "CRITICAL": "alta",
                 "ERROR": "alta",
                 "WARNING": "media",
+                "NOTICE": "media",
                 "INFO": "baja",
                 "DEBUG": "baja"
             }
