@@ -561,148 +561,73 @@ async def get_filtered_logs(
     }
 
 
-@router.get("/fail2ban/stats", summary="Fail2ban statistics overview", tags=["fail2ban"])
+@router.get("/fail2ban/stats", summary="Fail2ban statistics overview")
 async def get_stats(
-    start: Optional[int] = Query(None, description="Start of time window (UNIX timestamp, seconds). Default: 1 hour ago."),
-    end: Optional[int] = Query(None, description="End of time window (UNIX timestamp, seconds). Default: now."),
-    service: Optional[str] = Query("fail2ban", description="Log 'job' label to filter (default: fail2ban)")
+    start: Optional[int] = Query(None, description="Inicio del rango de tiempo (timestamp UNIX en segundos)."),
+    end: Optional[int] = Query(None, description="Fin del rango de tiempo (timestamp UNIX en segundos)."),
+    service: Optional[str] = Query("fail2ban", description="Etiqueta 'job' para filtrar (por defecto: fail2ban)")
 ):
-    """
-    Returns statistics for Fail2ban events in the given time window, including:
-    - Total failures (Found)
-    - Total bans
-    - Unique IPs detected
-    - Active bans (bans - unbans)
-    Also returns percentage change (delta) compared to the previous window.
-    """
+    # Compilamos regex para IPs (IPv4) y los tipos de eventos
+    ip_regex = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+    found_regex = re.compile(r"\bfound\b", re.IGNORECASE)
+    ban_regex = re.compile(r"\bban\b", re.IGNORECASE)
+    unban_regex = re.compile(r"\bunban\b", re.IGNORECASE)
+
+    # Establecer valores por defecto si no se proporcionan
     now = int(time.time())
     if end is None:
         end = now
     if start is None:
         start = end - 3600
 
-    # Enforce window size limits
-    MIN_WINDOW = 60  # 1 minute
-    MAX_WINDOW = 3600  # 1 hour
-    window = end - start
-    if window < MIN_WINDOW:
-        start = end - MIN_WINDOW
-        window = MIN_WINDOW
-    elif window > MAX_WINDOW:
-        start = end - MAX_WINDOW
-        window = MAX_WINDOW
+    query = f'{{job="{service}"}}'
 
-    prev_start = start - window
-    prev_end = start
+    params = {
+        "query": query,
+        "limit": 10000,
+        "direction": "forward",
+        "start": str(start * 1_000_000_000),
+        "end": str(end * 1_000_000_000),
+    }
 
-    # Correct f-string for Loki label selector
-    expr_base = f'{{job="{service}"}}'
+    async with AsyncClient() as client:
+        try:
+            response = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=10.0)
+            response.raise_for_status()
+        except (RequestError, HTTPStatusError) as exc:
+            raise HTTPException(status_code=503, detail=f"Error al contactar Loki: {str(exc)}")
 
-    async def quick_count(label: str, s: int, e: int) -> int:
-        params = {
-            "query": f'count_over_time({expr_base} |= "{label}" [{window}s])',
-            "start": str(s * 1_000_000_000),
-            "end": str(e * 1_000_000_000),
-            "step": str(window)
-        }
-        async with AsyncClient() as client:
-            try:
-                res = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=5.0)
-                res.raise_for_status()
-                data = res.json().get("data", {}).get("result", [])
-                if data and data[0]["values"]:
-                    return int(float(data[0]["values"][-1][1]))
-                return 0
-            except Exception as exc:
-                print("Count error:", exc)
-                return None
+    results = response.json().get("data", {}).get("result", [])
 
-    async def fast_ip_count(s: int, e: int) -> int:
-        # Try to use count_values_over_time for unique IPs if Loki supports it
-        params = {
-            "query": f'count_values_over_time("ip", {expr_base} |= "Found" | regexp "(?P<ip>\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b)" [{window}s])',
-            "start": str(s * 1_000_000_000),
-            "end": str(e * 1_000_000_000),
-            "step": str(window)
-        }
-        async with AsyncClient() as client:
-            try:
-                res = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=5.0)
-                res.raise_for_status()
-                data = res.json().get("data", {}).get("result", [])
-                if data and data[0]["values"]:
-                    # The value is the count of unique IPs
-                    return int(float(data[0]["values"][-1][1]))
-                return 0
-            except Exception as exc:
-                print("IP count error (count_values_over_time):", exc)
-                # Fallback to old method if not supported
-                params_fallback = {
-                    "query": f'{expr_base} |= "Found"',
-                    "start": str(s * 1_000_000_000),
-                    "end": str(e * 1_000_000_000),
-                    "limit": 500,
-                    "direction": "backward"
-                }
-                try:
-                    res = await client.get(settings.LOKI_QUERY_URL, params=params_fallback, timeout=5.0)
-                    res.raise_for_status()
-                    results = res.json().get("data", {}).get("result", [])
-                    ips = set()
-                    for stream in results:
-                        for _, line in stream.get("values", []):
-                            match = re.search(r"\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b", line)
-                            if match:
-                                ips.add(match.group(0))
-                    return len(ips)
-                except Exception as exc2:
-                    print("IP count error (fallback):", exc2)
-                    return None
+    failures = bans = unbans = 0
+    ip_set = set()
 
-    def with_delta(current: int, previous: int):
-        if current is None:
-            return {"value": None, "deltaPct": None}
-        if previous in (None, 0):
-            return { "value": current, "deltaPct": None }
-        delta = round(((current - previous) / previous) * 100, 2)
-        return {"value": current, "deltaPct": delta}
+    for entry in results:
+        values = entry.get("values", [])
+        for _, log_line in values:
+            # Extraer IP si existe
+            ip_match = ip_regex.search(log_line)
+            if ip_match:
+                ip_set.add(ip_match.group(0))
 
-    # Run all queries in parallel
-    results = await asyncio.gather(
-        quick_count("Found", start, end),
-        quick_count("Found", prev_start, prev_end),
-        quick_count("Ban", start, end),
-        quick_count("Ban", prev_start, prev_end),
-        quick_count("Unban", start, end),
-        quick_count("Unban", prev_start, prev_end),
-        fast_ip_count(start, end),
-        fast_ip_count(prev_start, prev_end),
-        return_exceptions=True
-    )
-    (
-        current_failures, previous_failures,
-        current_bans, previous_bans,
-        current_unbans, previous_unbans,
-        current_ips, previous_ips
-    ) = results
-
-    # If any are None or exception, handle gracefully
-    def safe(val):
-        return val if isinstance(val, int) else None
-
-    current_active_bans = max(0, safe(current_bans) - safe(current_unbans)) if safe(current_bans) is not None and safe(current_unbans) is not None else None
-    previous_active_bans = max(0, safe(previous_bans) - safe(previous_unbans)) if safe(previous_bans) is not None and safe(previous_unbans) is not None else None
+            # Buscar tipo de evento solo una vez
+            if found_regex.search(log_line):
+                failures += 1
+            elif unban_regex.search(log_line):
+                unbans += 1
+            elif ban_regex.search(log_line):
+                bans += 1
 
     return {
         "overview": {
-            "totalFailures": with_delta(safe(current_failures), safe(previous_failures)),
-            "totalBans":     with_delta(safe(current_bans), safe(previous_bans)),
-            "uniqueIPs":     with_delta(safe(current_ips), safe(previous_ips)),
-            "activeBans":    with_delta(current_active_bans, previous_active_bans),
+            "totalFailures": {"value": failures, "deltaPct": None},
+            "totalBans": {"value": bans, "deltaPct": None},
+            "uniqueIPs": {"value": len(ip_set), "deltaPct": None},
+            "activeBans": {"value": bans - unbans, "deltaPct": None},
         },
-        "windowSeconds": window,
-        "note": "If any value is null, it means the query failed or is not supported by Loki."
-}
+        "windowSeconds": end - start,
+        "note": "Análisis optimizado del contenido de logs sin uso de labels ni stream."
+    }
 
 
 # --- FIN: Código de la versión más completa de controllers/logs.py ---

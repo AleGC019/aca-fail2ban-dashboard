@@ -16,38 +16,19 @@ scrape_configs:
         labels:
           job: fail2ban
           __path__: ${FAIL2BAN_LOG_PATH}
-
     pipeline_stages:
       - multiline:
           firstline: '^\d{4}-\d{2}-\d{2}'
-
       - regex:
           expression: >
-            ^(?P<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+\s+fail2ban\.(?P<component>\S+)\s+\[(?P<pid>\d+)\]:\s+(?P<level>\S+)\s+(?P<rest>.*)$
-
+            ^(?P<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+\s+fail2ban\.(?P<component>\S+)\s+\[(?P<pid>\d+)\]:\s+(?P<level>\S+)\s+\[(?P<jail>[^\]]+)\]\s+(?P<msg>.*)$
       - timestamp:
           source: time
-          format: "2006-01-02 15:04:05"
-
-      - match:
-          selector: '{job="fail2ban"}'
-          stages:
-            - regex:
-                expression: '\[(?P<jail>[^\]]+)\]\s+(?P<action>Found|Ban|Unban)\s+(?P<ip>[0-9.:]+)'
-            - labels:
-                jail: jail
-                action: action
-                ip: ip
-
-      - match:
-          selector: '{job="fail2ban",action!~".+"}'
-          stages:
-            - regex:
-                expression: "ip:(?P<ip>[0-9.:]+)"
-            - labels:
-                ip: ip
-
+          format: '2006-01-02 15:04:05'
       - labels:
           component: component
           pid: pid
           level: level
+          jail: jail
+      - output:
+          source: msg
