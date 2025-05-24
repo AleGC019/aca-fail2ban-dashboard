@@ -30,7 +30,7 @@ jobs:
 
       - name: Run Ruff linter
         run: |
-          ruff check api/ --output-format=github
+          ruff check api/ 
           ruff format api/ --check
 
   build:
