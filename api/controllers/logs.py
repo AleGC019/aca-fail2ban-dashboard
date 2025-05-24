@@ -402,9 +402,6 @@ async def get_stats(
     prev_start = start - window
     prev_end = start
 
-    # Regex para extraer IPs (IPv4)
-    ip_regex = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-
     async def query_total_logs(s: int, e: int):
         """Consulta todos los logs para contar el total"""
         params = {
