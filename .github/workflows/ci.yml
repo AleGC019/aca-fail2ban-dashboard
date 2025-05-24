@@ -116,7 +116,9 @@ jobs:
           pip install pytest
 
       - name: Run unit tests
-        run: pytest api/tests -q
+        run: |
+          cd api
+          PYTHONPATH=. pytest tests -q
 
   security-scan:
     name: Stage 5 - Security Scans
