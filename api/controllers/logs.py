@@ -376,10 +376,10 @@ async def get_stats(
     """
     Retorna estadísticas de Fail2ban para un intervalo dado,
     analizando los logs directamente para encontrar:
-    - Total failures (Found)
-    - Total bans (Ban)
-    - Unique IPs detectadas
-    - Active bans (Ban - Unban)
+    - Cantidad de Logs (comparado con la hora pasada)
+    - Tasa de parseo (% de logs que cayeron en un match con action o jail vs. total)
+    - Cantidad de eventos de baneo
+    - Cantidad de Logs con (WARNING+ERROR)
     También calcula delta (%) comparado con el período anterior.
     """
 
@@ -405,10 +405,10 @@ async def get_stats(
     # Regex para extraer IPs (IPv4)
     ip_regex = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 
-    async def query_logs(s: int, e: int):
+    async def query_total_logs(s: int, e: int):
+        """Consulta todos los logs para contar el total"""
         params = {
-            # Query para traer logs que contengan Found, Ban o Unban en cualquier parte del log
-            "query": 'Found or Ban or Unban',
+            "query": '{job="fail2ban"}',
             "start": str(s * 1_000_000_000),
             "end": str(e * 1_000_000_000),
             "limit": 10000,
@@ -419,46 +419,102 @@ async def get_stats(
                 res = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=10.0)
                 res.raise_for_status()
                 data = res.json().get("data", {}).get("result", [])
-                return data
+                total_count = 0
+                for stream in data:
+                    total_count += len(stream.get("values", []))
+                return total_count
             except Exception as exc:
-                print(f"Error querying logs: {exc}")
-                return None
+                print(f"Error querying total logs: {exc}")
+                return 0
 
-    def process_logs(data):
-        if not data:
-            return 0, 0, 0, 0  # failures, bans, unbans, unique_ips
+    async def query_matched_logs(s: int, e: int):
+        """Consulta logs que contienen actions o jails específicos"""
+        params = {
+            "query": '{job="fail2ban"} |~ "(Found|Ban|Unban|\\[\\w+\\])"',
+            "start": str(s * 1_000_000_000),
+            "end": str(e * 1_000_000_000),
+            "limit": 10000,
+            "direction": "forward"
+        }
+        async with AsyncClient() as client:
+            try:
+                res = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=10.0)
+                res.raise_for_status()
+                data = res.json().get("data", {}).get("result", [])
+                matched_count = 0
+                for stream in data:
+                    matched_count += len(stream.get("values", []))
+                return matched_count
+            except Exception as exc:
+                print(f"Error querying matched logs: {exc}")
+                return 0
 
-        failures = 0
-        bans = 0
-        unbans = 0
-        ips_set = set()
+    async def query_ban_events(s: int, e: int):
+        """Consulta eventos de baneo"""
+        params = {
+            "query": '{job="fail2ban"} |= "Ban"',
+            "start": str(s * 1_000_000_000),
+            "end": str(e * 1_000_000_000),
+            "limit": 10000,
+            "direction": "forward"
+        }
+        async with AsyncClient() as client:
+            try:
+                res = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=10.0)
+                res.raise_for_status()
+                data = res.json().get("data", {}).get("result", [])
+                ban_count = 0
+                for stream in data:
+                    ban_count += len(stream.get("values", []))
+                return ban_count
+            except Exception as exc:
+                print(f"Error querying ban events: {exc}")
+                return 0
 
-        for stream in data:
-            # Cada stream tiene "values": list of [timestamp, log_line]
-            for _, line in stream.get("values", []):
-                if "Found" in line:
-                    failures += 1
-                    # Extraer IPs únicas
-                    for ip in ip_regex.findall(line):
-                        ips_set.add(ip)
-                if "Ban" in line:
-                    bans += 1
-                if "Unban" in line:
-                    unbans += 1
+    async def query_warning_error_logs(s: int, e: int):
+        """Consulta logs con WARNING o ERROR"""
+        params = {
+            "query": '{job="fail2ban"} |~ "(WARNING|ERROR)"',
+            "start": str(s * 1_000_000_000),
+            "end": str(e * 1_000_000_000),
+            "limit": 10000,
+            "direction": "forward"
+        }
+        async with AsyncClient() as client:
+            try:
+                res = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=10.0)
+                res.raise_for_status()
+                data = res.json().get("data", {}).get("result", [])
+                warning_error_count = 0
+                for stream in data:
+                    warning_error_count += len(stream.get("values", []))
+                return warning_error_count
+            except Exception as exc:
+                print(f"Error querying warning/error logs: {exc}")
+                return 0
 
-        unique_ips = len(ips_set)
-        return failures, bans, unbans, unique_ips
-
-    # Consultar logs en paralelo para ventana actual y anterior
-    results = await asyncio.gather(
-        query_logs(start, end),
-        query_logs(prev_start, prev_end),
+    # Realizar todas las consultas en paralelo para ambos períodos
+    current_results = await asyncio.gather(
+        query_total_logs(start, end),
+        query_matched_logs(start, end),
+        query_ban_events(start, end),
+        query_warning_error_logs(start, end)
+    )
+    
+    previous_results = await asyncio.gather(
+        query_total_logs(prev_start, prev_end),
+        query_matched_logs(prev_start, prev_end),
+        query_ban_events(prev_start, prev_end),
+        query_warning_error_logs(prev_start, prev_end)
     )
 
-    current_data, previous_data = results
+    # Extraer resultados
+    current_total, current_matched, current_bans, current_warning_error = current_results
+    prev_total, prev_matched, prev_bans, prev_warning_error = previous_results
 
-    current_failures, current_bans, current_unbans, current_ips = process_logs(current_data)
-    prev_failures, prev_bans, prev_unbans, prev_ips = process_logs(previous_data)
+    # Calcular tasa de parseo
+    current_parse_rate = (current_matched / current_total * 100) if current_total > 0 else 0
+    prev_parse_rate = (prev_matched / prev_total * 100) if prev_total > 0 else 0
 
     def with_delta(current: int, previous: int):
         if current is None:
@@ -468,15 +524,20 @@ async def get_stats(
         delta = round(((current - previous) / previous) * 100, 2)
         return {"value": current, "deltaPct": delta}
 
-    current_active = max(0, current_bans - current_unbans)
-    previous_active = max(0, prev_bans - prev_unbans)
+    def with_delta_float(current: float, previous: float):
+        if current is None:
+            return {"value": None, "deltaPct": None}
+        if previous in (None, 0):
+            return {"value": round(current, 2), "deltaPct": None}
+        delta = round(((current - previous) / previous) * 100, 2)
+        return {"value": round(current, 2), "deltaPct": delta}
 
     return {
         "overview": {
-            "totalFailures": with_delta(current_failures, prev_failures),
-            "totalBans": with_delta(current_bans, prev_bans),
-            "uniqueIPs": with_delta(current_ips, prev_ips),
-            "activeBans": with_delta(current_active, previous_active),
+            "totalLogs": with_delta(current_total, prev_total),
+            "parseRate": with_delta_float(current_parse_rate, prev_parse_rate),
+            "banEvents": with_delta(current_bans, prev_bans),
+            "warningErrorLogs": with_delta(current_warning_error, prev_warning_error),
         },
         "windowSeconds": window,
         "note": "If any value is null, it means the query failed or logs were unavailable."
