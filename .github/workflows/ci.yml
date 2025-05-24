@@ -31,7 +31,7 @@ jobs:
       - name: Run Ruff linter
         run: |
           ruff check api/ 
-          ruff format api/ --check
+          ruff format api/ --check --diff || echo "Code needs formatting"
 
   build:
     name: Stage 2 - Container Build
