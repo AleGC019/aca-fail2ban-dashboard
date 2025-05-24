@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Setup Python and Ruff
         run: |
@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Create environment file
         run: |
@@ -45,7 +45,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Create environment file
         run: |
@@ -107,7 +107,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Setup Python environment
         run: |
@@ -126,7 +126,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: pip-audit
         run: |
@@ -146,11 +146,37 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+
+      - name: Create environment file
+        run: |
+          cp .env.example .env || echo "No .env.example found, creating new .env file"
+          echo "FAIL2BAN_LOG_PATH=/tmp/fail2ban.log" >> .env
+          echo "FAIL2BAN_LOG_PATH=/tmp/fail2ban.log" >> $GITHUB_ENV
+
+      - name: Start service stack
+        run: docker compose up -d --build
 
       - name: Inject synthetic log line
         run: |
           echo 'May 24 20:00:00 server fail2ban[1234]: NOTICE [sshd] Ban 1.2.3.4' >> /tmp/fail2ban.log
+
+      - name: Wait for API health check
+        run: |
+          attempt=1
+          max_attempts=10
+          interval=5
+          until curl --fail http://localhost:8000/health || [ $attempt -eq $max_attempts ]; do
+            echo "Attempt $attempt/$max_attempts: Waiting for API to be ready..."
+            sleep $interval
+            ((attempt++))
+          done
+
+          if [ $attempt -eq $max_attempts ]; then
+            echo "ERROR: API health check failed after $max_attempts attempts"
+            docker compose logs
+            exit 1
+          fi
 
       - name: Check log via API
         run: |
@@ -168,13 +194,13 @@ jobs:
     if: always()
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Collect logs
         run: docker compose logs --no-color > logs.txt
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: service-logs
           path: logs.txt
@@ -185,5 +211,8 @@ jobs:
     runs-on: ubuntu-latest
     if: always()
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Remove containers and volumes
         run: docker compose down -v --remove-orphans
