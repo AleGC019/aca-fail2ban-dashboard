@@ -14,13 +14,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Python and Ruff
-        run: |
-          python3 -m pip install --upgrade pip
-          pip install ruff
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-ruff
+
+      - name: Install Ruff
+        run: pip install ruff
 
       - name: Run Ruff linter
-        run: ruff check api/
+        run: |
+          ruff check api/ --output-format=github
+          ruff format api/ --check
 
   build:
     name: Stage 2 - Container Build
@@ -128,15 +139,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Create environment file
+        run: |
+          cp .env.example .env
+          echo "FAIL2BAN_LOG_PATH=/tmp/fail2ban.log" >> .env
+
+      - name: Build API image for scanning
+        run: docker build -t fail2ban-api:latest ./api
+
       - name: pip-audit
         run: |
           pip install pip-audit
           pip-audit -r api/requirements.txt
 
       - name: Docker image scan (Trivy)
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.24.0
         with:
-          image-ref: "your-api-image-name:latest"
+          image-ref: "fail2ban-api:latest"
           format: "table"
           exit-code: "1"
 
@@ -144,15 +163,16 @@ jobs:
     name: Stage 6 - Integration Flow Test
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Create environment file
+      - name: Create environment and mock log
         run: |
-          cp .env.example .env || echo "No .env.example found, creating new .env file"
+          cp .env.example .env
           echo "FAIL2BAN_LOG_PATH=/tmp/fail2ban.log" >> .env
-          echo "FAIL2BAN_LOG_PATH=/tmp/fail2ban.log" >> $GITHUB_ENV
+          echo 'May 24 19:00:00 server fail2ban[1234]: INFO [sshd] Starting' > /tmp/fail2ban.log
 
       - name: Start service stack
         run: docker compose up -d --build
@@ -165,23 +185,18 @@ jobs:
         run: |
           attempt=1
           max_attempts=10
-          interval=5
           until curl --fail http://localhost:8000/health || [ $attempt -eq $max_attempts ]; do
             echo "Attempt $attempt/$max_attempts: Waiting for API to be ready..."
-            sleep $interval
+            sleep 5
             ((attempt++))
           done
 
-          if [ $attempt -eq $max_attempts ]; then
-            echo "ERROR: API health check failed after $max_attempts attempts"
-            docker compose logs
-            exit 1
-          fi
-
       - name: Check log via API
         run: |
-          sleep 5
-          curl --fail http://localhost:8000/fail2ban-logs | grep "1.2.3.4"
+          sleep 10
+          response=$(curl --fail "http://localhost:8000/fail2ban/logs?limit=10")
+          echo "$response" | jq .
+          echo "$response" | grep -q "1.2.3.4" || (echo "Expected IP not found in logs" && exit 1)
 
       - name: Debug on failure
         if: failure()
