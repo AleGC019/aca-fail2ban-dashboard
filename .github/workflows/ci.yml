@@ -269,8 +269,8 @@ jobs:
 
   notify-jira:
     name: Stage 8 - Notify Jira
-    needs: [cleanup]
     environment: JIRA
+    needs: [cleanup]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -280,41 +280,64 @@ jobs:
       - name: Verify Jira variables
         run: |
           missing_vars=""
-          
-          if [ -z "${{ secrets.JIRA_USER_EMAIL }}" ]; then
-            missing_vars="$missing_vars JIRA_USER_EMAIL"
-          fi
-          
-          if [ -z "${{ secrets.JIRA_API_TOKEN }}" ]; then
-            missing_vars="$missing_vars JIRA_API_TOKEN"
-          fi
-          
-          if [ -z "${{ secrets.JIRA_PROJECT_KEY }}" ]; then
-            missing_vars="$missing_vars JIRA_PROJECT_KEY"
-          fi
-          
-          if [ -z "${{ secrets.JIRA_BASE_URL }}" ]; then
-            missing_vars="$missing_vars JIRA_BASE_URL"
-          fi
-          
+          for var in JIRA_USER_EMAIL JIRA_API_TOKEN JIRA_PROJECT_KEY JIRA_BASE_URL; do
+            if [ -z "${{ secrets[$var] }}" ]; then
+              missing_vars="$missing_vars $var"
+            fi
+          done
           if [ -n "$missing_vars" ]; then
             echo "ERROR: Missing Jira secrets:$missing_vars"
-            echo "Please configure these secrets in GitHub Settings → Secrets and variables → Actions"
             exit 1
           fi
-          
           echo "✅ All Jira secrets are configured"
 
       - name: Notify Jira with CI report
+        env:
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
         run: |
-          curl -X POST -u "${{ secrets.JIRA_USER_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}" \
-          -H "Content-Type: application/json" \
-          --data '{
-            "fields": {
-              "project": { "key": "${{ secrets.JIRA_PROJECT_KEY }}" },
-              "summary": "Reporte de CI: ${{ github.workflow }} en ${{ github.ref_name }}",
-              "description": "El pipeline ha finalizado.\nCommit: ${{ github.sha }}\nAutor: ${{ github.actor }}",
-              "issuetype": { "name": "Task" }
-            }
-          }' \
-          "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue"
+          curl -X POST -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data '{
+              "fields": {
+                "project": { "key": "'"$JIRA_PROJECT_KEY"'" },
+                "summary": "Reporte de CI: '"${{ github.workflow }}"' en '"${{ github.ref_name }}"'",
+                "description": {
+                  "type": "doc",
+                  "version": 1,
+                  "content": [
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "El pipeline ha finalizado."
+                        }
+                      ]
+                    },
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Commit: '"${{ github.sha }}"'"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Autor: '"${{ github.actor }}"'"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "issuetype": { "name": "Task" }
+              }
+            }' \
+            "$JIRA_BASE_URL/rest/api/3/issue"
