@@ -514,7 +514,6 @@ jobs:
                   ]
                 },
                 "issuetype": { "name": "Task" },
-                "priority": { "name": "'"$PRIORITY"'" },
                 "labels": [ 
                   "ci-pipeline", 
                   "fail2ban-dashboard", 
