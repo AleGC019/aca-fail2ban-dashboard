@@ -269,7 +269,16 @@ jobs:
   notify-jira:
     name: Stage 8 - Notify Jira
     environment: JIRA
-    needs: [cleanup, lint, build, test, unit-tests, integration-check, save-artifacts]
+    needs:
+      [
+        cleanup,
+        lint,
+        build,
+        test,
+        unit-tests,
+        integration-check,
+        save-artifacts,
+      ]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -302,13 +311,20 @@ jobs:
           JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
           JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
         run: |
-          # Determinar el estado del pipeline
-          if [ "${{ job.status }}" = "success" ]; then
+          # Determinar el estado del pipeline basado en todos los jobs
+          if [[ "${{ needs.lint.result }}" == "success" && \
+                "${{ needs.build.result }}" == "success" && \
+                "${{ needs.test.result }}" == "success" && \
+                "${{ needs.unit-tests.result }}" == "success" && \
+                "${{ needs.integration-check.result }}" == "success" && \
+                "${{ needs.save-artifacts.result }}" == "success" && \
+                "${{ needs.cleanup.result }}" == "success" ]]; then
             STATUS="✅ EXITOSO"
-            PRIORITY="Low"
+            echo "✅ Pipeline completado exitosamente"
           else
-            STATUS="❌ FALLIDO"
-            PRIORITY="High"
+            STATUS="❌ FALLIDO" 
+            echo "❌ Pipeline falló - Revisar etapas individuales"
+            echo "Estados: lint=${{ needs.lint.result }}, build=${{ needs.build.result }}, test=${{ needs.test.result }}, unit-tests=${{ needs.unit-tests.result }}, integration-check=${{ needs.integration-check.result }}, save-artifacts=${{ needs.save-artifacts.result }}, cleanup=${{ needs.cleanup.result }}"
           fi
 
           # Crear descripción detallada
