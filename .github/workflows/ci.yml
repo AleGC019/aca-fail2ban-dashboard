@@ -275,7 +275,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        
+
       - name: Verify Jira variables
         run: |
           missing_vars=""
