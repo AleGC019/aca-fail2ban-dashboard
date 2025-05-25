@@ -4,7 +4,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPExcept
 from httpx import AsyncClient, RequestError, HTTPStatusError
 # --- CAMBIO AQUÍ ---
 # Se importa LOKI_QUERY_URL directamente, no 'settings'
-from services.fail2ban import get_currently_banned_ips
+from services.fail2ban import get_currently_banned_ips, jail_exists
 from configuration.settings import settings
 # -------------------
 import asyncio
@@ -29,6 +29,37 @@ import random
 # from services.loki import query_loki # Necesario si llamas a esta función aquí
 
 router = APIRouter()
+
+# Funciones auxiliares
+async def query_loki_with_retry(client, url, max_retries=3, base_delay=1):
+    """
+    Función auxiliar para realizar una consulta a Loki con reintentos y backoff exponencial.
+    
+    :param client: Instancia de httpx.AsyncClient
+    :param url: URL completa de la consulta a Loki
+    :param max_retries: Número máximo de reintentos
+    :param base_delay: Retraso base en segundos para el backoff exponencial
+    :return: Respuesta JSON de Loki o None si falla después de los reintentos
+    """
+    for attempt in range(max_retries):
+        try:
+            response = await client.get(url)
+            if response.status_code == 200:
+                return response.json()
+            elif response.status_code == 429:
+                # Calcular el tiempo de espera con backoff exponencial y jitter
+                wait_time = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                print(f"Recibido 429. Esperando {wait_time:.2f} segundos antes de reintentar...")
+                await asyncio.sleep(wait_time)
+            else:
+                raise ValueError(f"Query failed with status {response.status_code}")
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise e
+            wait_time = base_delay * (2 ** attempt) + random.uniform(0, 1)
+            print(f"Error en la consulta: {e}. Esperando {wait_time:.2f} segundos antes de reintentar...")
+            await asyncio.sleep(wait_time)
+    return None
 
 
 # --- INICIO: Código de la versión más completa de controllers/logs.py ---
@@ -282,12 +313,10 @@ async def get_banned_ips(
     size: int = Query(10, ge=1, le=100, description="Tamaño de página."),
     hours: int = Query(24, ge=1, le=168, description="Rango de tiempo en horas hacia atrás")
 ):
-    # Últimas N horas en nanosegundos
     start_time_sec = int(time.time()) - (hours * 3600)
     start_ns = start_time_sec * 1_000_000_000
     end_ns = int(time.time()) * 1_000_000_000
 
-    # Consulta para baneos y desbaneos
     params_ban = {
         "query": '{job="fail2ban", level="NOTICE"} |= "Ban"',
         "start": str(start_ns),
@@ -311,30 +340,29 @@ async def get_banned_ips(
         except Exception as exc:
             raise HTTPException(status_code=503, detail=f"Error al contactar Loki: {str(exc)}")
 
-    # Procesar logs de baneos
     ban_results = ban_response.get("data", {}).get("result", []) if ban_response else []
     unban_results = unban_response.get("data", {}).get("result", []) if unban_response else []
 
     ban_entries = []
     unban_ips = set()
-    ip_pattern = re.compile(r"(?:Ban|already banned)\s+(\d{1,3}(?:\.\d{1,3}){3})")
+    ip_pattern = re.compile(r"(?:Ban|already banned|Banned)\s+(\d{1,3}(?:\.\d{1,3}){3})")
 
-    # Procesar desbaneos
     for stream in unban_results:
         for ts, line in stream.get("values", []):
             match = re.search(r"Unban\s+(\d{1,3}(?:\.\d{1,3}){3})", line)
             if match:
                 unban_ips.add(match.group(1))
 
-    # Procesar baneos
     for stream in ban_results:
         jail = stream.get("stream", {}).get("jail", "desconocido")
         for ts, line in stream.get("values", []):
             ip_match = ip_pattern.search(line)
             if not ip_match:
+                print(f"No se encontró IP en el log: {line}")
                 continue
             ip = ip_match.group(1)
             if ip in unban_ips:
+                print(f"IP {ip} fue desbaneada, omitiendo")
                 continue
 
             ban_time_ns = int(ts)
@@ -344,27 +372,23 @@ async def get_banned_ips(
                 "ip": ip,
                 "jail": jail,
                 "ban_time": ban_time_str,
-                "failed_attempts": 1,  # No extraemos intentos fallidos si no están en el log
+                "failed_attempts": 1,
                 "raw_log": line
             })
 
-    # Verificar IPs actualmente baneadas en Fail2ban
     currently_banned_ips = set()
     jails = {entry["jail"] for entry in ban_entries if entry["jail"] != "desconocido"}
     for jail in jails:
         currently_banned_ips.update(get_currently_banned_ips(jail))
 
-    # Filtrar entradas para incluir solo IPs actualmente baneadas
     filtered_entries = [entry for entry in ban_entries if entry["ip"] in currently_banned_ips]
 
-    # Paginación
     total_count = len(filtered_entries)
     start_idx = page * size
     end_idx = start_idx + size
     paginated_entries = filtered_entries[start_idx:end_idx]
     total_pages = math.ceil(total_count / size) if total_count > 0 else 1
 
-    # Depuración
     print(f"Logs de baneo encontrados: {len(ban_results)} streams, {len(ban_entries)} entradas")
     print(f"IPs desbaneadas: {len(unban_ips)}")
     print(f"Jails detectados: {jails}")
@@ -379,6 +403,16 @@ async def get_banned_ips(
         "currentPage": page,
         "values": paginated_entries,
     }
+
+@router.get("/fail2ban/current-banned-ips")
+async def get_current_banned_ips(jail: str = "sshd"):
+    if not jail_exists(jail):
+        raise HTTPException(status_code=400, detail=f"El jail {jail} no existe.")
+    try:
+        banned_ips = get_currently_banned_ips(jail)
+        return {"banned_ips": banned_ips}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error al obtener IPs baneadas: {str(e)}")
 
 #async def get_banned_ips(
 #        page: int = Query(0, ge=0, description="Número de página."),
@@ -580,35 +614,6 @@ async def get_filtered_logs(
         "values": paginated,
     }
 
-async def query_loki_with_retry(client, url, max_retries=3, base_delay=1):
-    """
-    Función auxiliar para realizar una consulta a Loki con reintentos y backoff exponencial.
-    
-    :param client: Instancia de httpx.AsyncClient
-    :param url: URL completa de la consulta a Loki
-    :param max_retries: Número máximo de reintentos
-    :param base_delay: Retraso base en segundos para el backoff exponencial
-    :return: Respuesta JSON de Loki o None si falla después de los reintentos
-    """
-    for attempt in range(max_retries):
-        try:
-            response = await client.get(url)
-            if response.status_code == 200:
-                return response.json()
-            elif response.status_code == 429:
-                # Calcular el tiempo de espera con backoff exponencial y jitter
-                wait_time = base_delay * (2 ** attempt) + random.uniform(0, 1)
-                print(f"Recibido 429. Esperando {wait_time:.2f} segundos antes de reintentar...")
-                await asyncio.sleep(wait_time)
-            else:
-                raise ValueError(f"Query failed with status {response.status_code}")
-        except Exception as e:
-            if attempt == max_retries - 1:
-                raise e
-            wait_time = base_delay * (2 ** attempt) + random.uniform(0, 1)
-            print(f"Error en la consulta: {e}. Esperando {wait_time:.2f} segundos antes de reintentar...")
-            await asyncio.sleep(wait_time)
-    return None
 
 @router.get("/fail2ban/stats", summary="Fail2ban statistics overview")
 async def get_fail2ban_stats():
