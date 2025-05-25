@@ -1,6 +1,5 @@
 import ipaddress
 import subprocess
-import re
 from fastapi import HTTPException
 from typing import List
 
