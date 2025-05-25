@@ -160,14 +160,14 @@ jobs:
 
       - name: Set environment variables for tests
         run: |
-          echo "LOKI_QUERY_URL=http://test:3100/api/v1/query_range" >> $GITHUB_ENV
+          echo "LOKI_QUERY_URL=http://test-loki:3100/api/v1/query_range" >> $GITHUB_ENV
 
       - name: Run unit tests
         run: |
           cd api
           PYTHONPATH=. python -m pytest tests/ -v --tb=short
         env:
-          LOKI_QUERY_URL: http://test:3100/api/v1/query_range
+          LOKI_QUERY_URL: http://test-loki:3100/api/v1/query_range
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
