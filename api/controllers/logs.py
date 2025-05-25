@@ -231,112 +231,6 @@ async def websocket_fail2ban_logs_stream_v2(
         print(f"Cerrando WebSocket para {client_host}:{client_port} en /ws/fail2ban-logs-stream")
 
 
-#@router.get("/fail2ban/banned-ips")
-#async def get_banned_ips(
-#    page: int = Query(0, ge=0, description="Número de página."),
-#    size: int = Query(10, ge=1, le=100, description="Tamaño de página."),
-#    hours: int = Query(24, ge=1, le=168, description="Rango de tiempo en horas hacia atrás")
-#):
-#    # Últimas N horas en nanosegundos
-#    start_time_sec = int(time.time()) - (hours * 3600)
-#    start_ns = start_time_sec * 1_000_000_000
-#    end_ns = int(time.time()) * 1_000_000_000
-#
-#    # Consultas para baneos y desbaneos
-#    params_ban = {
-#        "query": '{job="fail2ban"} |= "Ban"',
-#        "start": str(start_ns),
-#        "end": str(end_ns),
-#        "limit": 1000,
-#        "direction": "backward",
-#    }
-#    params_unban = {
-#        "query": '{job="fail2ban"} |= "Unban"',
-#        "start": str(start_ns),
-#        "end": str(end_ns),
-#        "limit": 1000,
-#        "direction": "backward",
-#    }
-#
-#    async with AsyncClient(timeout=10.0) as client:
-#        try:
-#            # Consultar baneos y desbaneos concurrentemente
-#            ban_response = await client.get(settings.LOKI_QUERY_URL, params=params_ban)
-#            unban_response = await client.get(settings.LOKI_QUERY_URL, params=params_unban)
-#            ban_response.raise_for_status()
-#            unban_response.raise_for_status()
-#        except (RequestError, HTTPStatusError) as exc:
-#            raise HTTPException(status_code=503, detail=f"Error al contactar Loki: {str(exc)}")
-#
-#    # Procesar logs de baneos
-#    ban_results = ban_response.json().get("data", {}).get("result", [])
-#    unban_results = unban_response.json().get("data", {}).get("result", [])
-#    
-#    ban_entries = []
-#    unban_ips = set()
-#    ip_pattern = re.compile(r"(?:Ban|already banned)\s+(\d{1,3}(?:\.\d{1,3}){3})")
-#    jail_pattern = re.compile(r"\[([^\]]+)\]")
-#
-#    # Procesar desbaneos para identificar IPs ya desbaneadas
-#    for stream in unban_results:
-#        for ts, line in stream.get("values", []):
-#            match = re.search(r"Unban\s+(\d{1,3}(?:\.\d{1,3}){3})", line)
-#            if match:
-#                unban_ips.add(match.group(1))
-#
-#    # Procesar baneos
-#    for stream in ban_results:
-#        for ts, line in stream.get("values", []):
-#            match = ip_pattern.search(line)
-#            if not match:
-#                continue
-#            ip = match.group(1)
-#            if ip in unban_ips:
-#                continue  # Saltar IPs que han sido desbaneadas
-#
-#            jail_match = jail_pattern.findall(line)
-#            jail = jail_match[1] if len(jail_match) > 1 else "desconocido"
-#
-#            attempts_match = re.search(r"after\s+(\d+)\s+failures?", line, re.IGNORECASE)
-#            failed_attempts = int(attempts_match.group(1)) if attempts_match else 1
-#
-#            ban_time_ns = int(ts)
-#            ban_time_str = datetime.utcfromtimestamp(ban_time_ns / 1_000_000_000).strftime('%Y-%m-%d %H:%M:%S')
-#
-#            ban_entries.append({
-#                "ip": ip,
-#                "jail": jail,
-#                "ban_time": ban_time_str,
-#                "failed_attempts": failed_attempts,
-#                "raw_log": line
-#            })
-#
-#    # Verificar IPs actualmente baneadas en Fail2ban
-#    currently_banned_ips = set()
-#    for entry in ban_entries:
-#        jail = entry["jail"]
-#        if jail != "desconocido":
-#            currently_banned_ips.update(get_currently_banned_ips(jail))
-#
-#    # Filtrar entradas para incluir solo IPs actualmente baneadas
-#    filtered_entries = [entry for entry in ban_entries if entry["ip"] in currently_banned_ips]
-#
-#    # Paginación
-#    total_count = len(filtered_entries)
-#    start_idx = page * size
-#    end_idx = start_idx + size
-#    paginated_entries = filtered_entries[start_idx:end_idx]
-#    total_pages = math.ceil(total_count / size) if total_count > 0 else 1
-#
-#    return {
-#        "totalCount": total_count,
-#        "totalPages": total_pages,
-#        "hasNextPage": end_idx < total_count,
-#        "hasPreviousPage": start_idx > 0,
-#        "currentPage": page,
-#        "values": paginated_entries,
-#    }
-
 @router.get("/fail2ban/banned-ips")
 async def get_banned_ips(
     page: int = Query(0, ge=0, description="Número de página"),
@@ -345,7 +239,7 @@ async def get_banned_ips(
     jail: str = Query("sshd", description="Nombre del jail de Fail2ban")
 ) -> dict:
     """
-    Obtiene IPs actualmente baneadas en un jail específico, con información detallada de los logs de Loki.
+    Obtiene IPs actualmente baneadas en un jail específico y busca sus logs de baneo en Loki.
     """
     # Verificar si el jail existe
     if not jail_exists(jail):
@@ -369,66 +263,61 @@ async def get_banned_ips(
             "values": []
         }
 
-    # Consultar logs en Loki para obtener detalles
+    # Consultar logs en Loki para cada IP baneada
     start_time_sec = int(time.time()) - (hours * 3600)
     start_ns = start_time_sec * 1_000_000_000
     end_ns = int(time.time()) * 1_000_000_000
 
-    params_ban = {
-        "query": f'{{job="fail2ban", jail="{jail}"}} |= "Ban"',
-        "start": str(start_ns),
-        "end": str(end_ns),
-        "limit": 1000,
-        "direction": "backward",
-    }
-
-    async with AsyncClient(timeout=10.0) as client:
-        try:
-            ban_response = await query_loki_with_retry_banned_ips(client, f"{settings.LOKI_QUERY_URL}?{urlencode(params_ban)}")
-        except Exception as exc:
-            print(f"Error al consultar Loki, usando datos mínimos: {str(exc)}")
-            ban_response = {"data": {"result": []}}
-
-    # Procesar resultados de Loki
-    ban_results = ban_response.get("data", {}).get("result", [])
     ban_entries = []
-    ip_pattern = re.compile(r"(?:Ban|already banned|Banned)\s+(\d{1,3}(?:\.\d{1,3}){3})")
-
-    for stream in ban_results:
-        for ts, line in stream.get("values", []):
-            ip_match = ip_pattern.search(line)
-            if not ip_match:
-                print(f"No se encontró IP en el log: {line}")
-                continue
-            ip = ip_match.group(1)
-            if ip not in currently_banned_ips:
-                print(f"IP {ip} no está actualmente baneada, omitiendo")
-                continue
-
-            ban_time_ns = int(ts)
-            ban_time_str = datetime.utcfromtimestamp(ban_time_ns / 1_000_000_000).strftime('%Y-%m-%d %H:%M:%S')
-
-            ban_entries.append({
-                "ip": ip,
-                "jail": jail,
-                "ban_time": ban_time_str,
-                "failed_attempts": 1,  # Placeholder, ya que los logs no proporcionan este dato
-                "raw_log": line
-            })
-
-    # Si no hay logs en Loki, crear entradas mínimas para las IPs baneadas
-    if not ban_entries:
-        print("No se encontraron logs en Loki, generando entradas mínimas")
-        ban_entries = [
-            {
-                "ip": ip,
-                "jail": jail,
-                "ban_time": datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
-                "failed_attempts": 1,
-                "raw_log": "No disponible (obtenido directamente de Fail2ban)"
+    async with AsyncClient(timeout=10.0) as client:
+        for ip in currently_banned_ips:
+            # Consulta específica para la IP con cualquier variante de "ban"
+            params_ban = {
+                "query": f'{{job="fail2ban", jail="{jail}"}} |= "{ip}" |= "[Bb][Aa][Nn](?:ned)?"',
+                "start": str(start_ns),
+                "end": str(end_ns),
+                "limit": 1,  # Solo necesitamos el log más reciente de baneo
+                "direction": "backward",
             }
-            for ip in currently_banned_ips
-        ]
+            try:
+                ban_response = await query_loki_with_retry(client, f"{settings.LOKI_QUERY_URL}?{urlencode(params_ban)}")
+                ban_results = ban_response.get("data", {}).get("result", [])
+
+                if ban_results:
+                    # Tomar el log más reciente
+                    for stream in ban_results:
+                        for ts, line in stream.get("values", []):
+                            ban_time_ns = int(ts)
+                            ban_time_str = datetime.utcfromtimestamp(ban_time_ns / 1_000_000_000).strftime('%Y-%m-%d %H:%M:%S')
+                            ban_entries.append({
+                                "ip": ip,
+                                "jail": jail,
+                                "ban_time": ban_time_str,
+                                "failed_attempts": 1,  # Placeholder
+                                "raw_log": line
+                            })
+                            break  # Solo tomar el primer log
+                        break  # Solo procesar el primer stream
+                else:
+                    print(f"No se encontraron logs de baneo para IP {ip} en Loki")
+                    # Fallback para IPs sin logs
+                    ban_entries.append({
+                        "ip": ip,
+                        "jail": jail,
+                        "ban_time": datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+                        "failed_attempts": 1,
+                        "raw_log": "No disponible (obtenido directamente de Fail2ban)"
+                    })
+            except Exception as exc:
+                print(f"Error al consultar Loki para IP {ip}: {str(exc)}")
+                # Fallback en caso de error
+                ban_entries.append({
+                    "ip": ip,
+                    "jail": jail,
+                    "ban_time": datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+                    "failed_attempts": 1,
+                    "raw_log": "Error al consultar Loki"
+                })
 
     # Paginación
     total_count = len(ban_entries)
@@ -437,7 +326,7 @@ async def get_banned_ips(
     paginated_entries = ban_entries[start_idx:end_idx]
     total_pages = math.ceil(total_count / size) if total_count > 0 else 1
 
-    print(f"Logs de baneo encontrados: {len(ban_results)} streams, {len(ban_entries)} entradas")
+    print(f"Entradas de baneo procesadas: {len(ban_entries)}")
     print(f"Jail consultado: {jail}")
     print(f"Entradas finales: {total_count}")
 
