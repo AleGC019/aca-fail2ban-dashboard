@@ -275,14 +275,6 @@ async def websocket_fail2ban_logs_stream_v2(
 #        "currentPage": page,
 #        "values": paginated_entries,
 #    }
-def get_currently_banned_ips(jail_name: str) -> List[str]:
-    """Obtiene la lista de IPs actualmente baneadas en un jail específico."""
-    try:
-        output = run_fail2ban_command(["get", jail_name, "banned"])
-        return output.strip().split("\n") if output and output.strip() else []
-    except Exception as e:
-        print(f"Error al obtener IPs baneadas para {jail_name}: {str(e)}")
-        return []
 
 @router.get("/fail2ban/banned-ips")
 async def get_banned_ips(
