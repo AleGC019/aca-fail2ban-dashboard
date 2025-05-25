@@ -62,6 +62,13 @@ def is_ip_banned(jail_name: str, ip_address: str) -> bool:
 #        raise HTTPException(
 #            status_code=500, detail=f"Error al ejecutar Fail2ban: {str(e)}"
 #        )
+def get_currently_banned_ips(jail_name: str) -> List[str]:
+    """Obtiene la lista de IPs actualmente baneadas en un jail específico."""
+    try:
+        output = run_fail2ban_command(["get", jail_name, "banned"])
+        return output.strip().split("\n") if output else []
+    except Exception:
+        return []
 
 def run_fail2ban_command(command_args: List[str]) -> str:
     """Ejecuta un comando de fail2ban-client y maneja errores."""
