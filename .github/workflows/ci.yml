@@ -265,12 +265,11 @@ jobs:
 
       - name: Teardown Docker
         run: docker compose down -v --remove-orphans --rmi local
-# ...existing code...
 
   notify-jira:
     name: Stage 8 - Notify Jira
     environment: JIRA
-    needs: [cleanup]
+    needs: [cleanup, lint, build, test, unit-tests, integration-check, save-artifacts]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -303,22 +302,60 @@ jobs:
           JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
           JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
         run: |
+          # Determinar el estado del pipeline
+          if [ "${{ job.status }}" = "success" ]; then
+            STATUS="✅ EXITOSO"
+            PRIORITY="Low"
+          else
+            STATUS="❌ FALLIDO"
+            PRIORITY="High"
+          fi
+
+          # Crear descripción detallada
           curl -X POST -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
             -H "Content-Type: application/json" \
             --data '{
               "fields": {
                 "project": { "key": "'"$JIRA_PROJECT_KEY"'" },
-                "summary": "Reporte de CI: '"${{ github.workflow }}"' en '"${{ github.ref_name }}"'",
+                "summary": "CI Pipeline '"$STATUS"' - '"${{ github.workflow }}"' en '"${{ github.ref_name }}"'",
                 "description": {
                   "type": "doc",
                   "version": 1,
                   "content": [
                     {
+                      "type": "heading",
+                      "attrs": { "level": 2 },
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Resumen del Pipeline"
+                        }
+                      ]
+                    },
+                    {
                       "type": "paragraph",
                       "content": [
                         {
                           "type": "text",
-                          "text": "El pipeline ha finalizado."
+                          "text": "Estado: '"$STATUS"'"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Rama: '"${{ github.ref_name }}"'"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Evento: '"${{ github.event_name }}"'"
                         }
                       ]
                     },
@@ -339,10 +376,151 @@ jobs:
                           "text": "Autor: '"${{ github.actor }}"'"
                         }
                       ]
+                    },
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Mensaje del commit: '"${{ github.event.head_commit.message }}"'"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "heading",
+                      "attrs": { "level": 3 },
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Etapas del Pipeline"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "✅ Stage 1 - Code Quality Check (Lint)"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "'"${{ needs.build.result == 'success' && '✅' || '❌' }}"' Stage 2 - Container Build"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "'"${{ needs.test.result == 'success' && '✅' || '❌' }}"' Stage 3 - Integration Testing"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "'"${{ needs.unit-tests.result == 'success' && '✅' || '❌' }}"' Stage 4 - Unit Tests"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "'"${{ needs.integration-check.result == 'success' && '✅' || '❌' }}"' Stage 5 - Integration Flow Test"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "'"${{ needs.save-artifacts.result == 'success' && '✅' || '❌' }}"' Stage 6 - Save Reports & Logs"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "'"${{ needs.cleanup.result == 'success' && '✅' || '❌' }}"' Stage 7 - Cleanup"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "heading",
+                      "attrs": { "level": 3 },
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Enlaces"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Ver pipeline: "
+                        },
+                        {
+                          "type": "text",
+                          "text": "'"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"'",
+                          "marks": [
+                            {
+                              "type": "link",
+                              "attrs": {
+                                "href": "'"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"'"
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "paragraph",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Ver commit: "
+                        },
+                        {
+                          "type": "text",
+                          "text": "'"${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"'",
+                          "marks": [
+                            {
+                              "type": "link",
+                              "attrs": {
+                                "href": "'"${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"'"
+                              }
+                            }
+                          ]
+                        }
+                      ]
                     }
                   ]
                 },
-                "issuetype": { "name": "Task" }
+                "issuetype": { "name": "Task" },
+                "priority": { "name": "'"$PRIORITY"'" },
+                "labels": [ 
+                  "ci-pipeline", 
+                  "fail2ban-dashboard", 
+                  "'"${{ github.ref_name }}"'",
+                  "'"${{ github.event_name }}"'"
+                ]
               }
             }' \
             "$JIRA_BASE_URL/rest/api/3/issue"
