@@ -402,7 +402,7 @@ async def query_loki_with_retry(client, url, max_retries=3, base_delay=1):
 
 @router.get("/fail2ban/stats", summary="Fail2ban statistics overview")
 async def get_fail2ban_stats():
-    loki_query_url = "http://loki:3100/loki/api/v1/query_range"
+
     end_time = int(time.time())  # Tiempo actual en segundos (UNIX timestamp)
     start_time_current = end_time - 3600  # Hace 1 hora
     start_time_previous = end_time - 7200  # Hace 2 horas
@@ -424,11 +424,11 @@ async def get_fail2ban_stats():
         async with httpx.AsyncClient(timeout=10.0) as client:
             # Crear URLs para cada consulta
             urls = [
-                f"{loki_query_url}?query={quote(queries[0])}&start={start_time_current}&end={end_time}&step=3600",
-                f"{loki_query_url}?query={quote(queries[1])}&start={start_time_previous}&end={start_time_current}&step=3600",
-                f"{loki_query_url}?query={quote(queries[2])}&start={start_time_current}&end={end_time}&step=3600",
-                f"{loki_query_url}?query={quote(queries[3])}&start={start_time_current}&end={end_time}&step=3600",
-                f"{loki_query_url}?query={quote(queries[4])}&start={start_time_current}&end={end_time}&step=3600"
+                f"{settings.LOKI_QUERY_URL}?query={quote(queries[0])}&start={start_time_current}&end={end_time}&step=3600",
+                f"{settings.LOKI_QUERY_URL}?query={quote(queries[1])}&start={start_time_previous}&end={start_time_current}&step=3600",
+                f"{settings.LOKI_QUERY_URL}?query={quote(queries[2])}&start={start_time_current}&end={end_time}&step=3600",
+                f"{settings.LOKI_QUERY_URL}?query={quote(queries[3])}&start={start_time_current}&end={end_time}&step=3600",
+                f"{settings.LOKI_QUERY_URL}?query={quote(queries[4])}&start={start_time_current}&end={end_time}&step=3600"
             ]
 
             # Ejecutar todas las consultas con reintentos

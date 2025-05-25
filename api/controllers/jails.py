@@ -15,7 +15,6 @@ async def execute_ip_action(jail_name: str, action: str, ip_address: str) -> Act
     
     is_banned = is_ip_banned(jail_name, ip_address)
     action_type = "banip" if action == "ban" else "unbanip"
-    expected_action = "Ban" if action == "ban" else "Unban"
     
     if action == "ban" and is_banned:
         return ActionResponse(
