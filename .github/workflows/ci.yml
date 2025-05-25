@@ -270,6 +270,7 @@ jobs:
   notify-jira:
     name: Stage 8 - Notify Jira
     needs: [cleanup]
+    environment: JIRA
     runs-on: ubuntu-latest
     if: always()
     steps:
