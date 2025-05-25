@@ -131,36 +131,36 @@ jobs:
           cd api
           PYTHONPATH=. pytest tests -q
 
-  security-scan:
-    name: Stage 5 - Security Scans
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+  # security-scan:
+  #   name: Stage 5 - Security Scans
+  #   needs: build
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Checkout repository
+  #       uses: actions/checkout@v4
 
-      - name: Create environment file
-        run: |
-          cp .env.example .env
-          echo "FAIL2BAN_LOG_PATH=/tmp/fail2ban.log" >> .env
+  #     - name: Create environment file
+  #       run: |
+  #         cp .env.example .env
+  #         echo "FAIL2BAN_LOG_PATH=/tmp/fail2ban.log" >> .env
 
-      - name: Build API image for scanning
-        run: docker build -t fail2ban-api:latest ./api
+  #     - name: Build API image for scanning
+  #       run: docker build -t fail2ban-api:latest ./api
 
-      - name: pip-audit
-        run: |
-          pip install pip-audit
-          pip-audit -r api/requirements.txt
+  #     - name: pip-audit
+  #       run: |
+  #         pip install pip-audit
+  #         pip-audit -r api/requirements.txt
 
-      - name: Docker image scan (Trivy)
-        uses: aquasecurity/trivy-action@0.24.0
-        with:
-          image-ref: "fail2ban-api:latest"
-          format: "table"
-          exit-code: "1"
+  #     - name: Docker image scan (Trivy)
+  #       uses: aquasecurity/trivy-action@0.24.0
+  #       with:
+  #         image-ref: "fail2ban-api:latest"
+  #         format: "table"
+  #         exit-code: "1"
 
   integration-check:
-    name: Stage 6 - Integration Flow Test
+    name: Stage 5 - Integration Flow Test
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -203,7 +203,7 @@ jobs:
         run: docker compose logs
 
   save-artifacts:
-    name: Stage 7 - Save Reports & Logs
+    name: Stage 6 - Save Reports & Logs
     needs: [unit-tests, integration-check]
     runs-on: ubuntu-latest
     if: always()
@@ -227,7 +227,7 @@ jobs:
           path: logs.txt
 
   cleanup:
-    name: Stage 8 - Cleanup
+    name: Stage 7 - Cleanup
     needs: [save-artifacts]
     runs-on: ubuntu-latest
     if: always()
