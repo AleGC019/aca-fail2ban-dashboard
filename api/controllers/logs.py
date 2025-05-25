@@ -61,6 +61,48 @@ async def query_loki_with_retry(client, url, max_retries=3, base_delay=1):
             await asyncio.sleep(wait_time)
     return None
 
+async def query_loki_with_retry_banned_ips(client: AsyncClient, url: str, max_retries: int = 3, base_delay: float = 1.0) -> dict:
+    """
+    Realiza una consulta a Loki con reintentos y backoff exponencial.
+    
+    Args:
+        client: Cliente HTTP asíncrono (httpx.AsyncClient).
+        url: URL completa de la consulta a Loki, incluyendo parámetros.
+        max_retries: Número máximo de reintentos (default: 3).
+        base_delay: Retraso base en segundos para el backoff (default: 1.0).
+    
+    Returns:
+        dict: Respuesta JSON de Loki.
+    
+    Raises:
+        HTTPException: Si la consulta falla después de todos los reintentos.
+    """
+    for attempt in range(max_retries):
+        try:
+            response = await client.get(url)
+            response.raise_for_status()  # Lanza excepción para códigos de error HTTP
+            print(f"Consulta a Loki exitosa en intento {attempt + 1}: {url}")
+            return response.json()
+        except HTTPStatusError as e:
+            if e.response.status_code == 429:
+                wait_time = base_delay * (2 ** attempt) + random.uniform(0, 0.1)
+                print(f"Error 429 (Too Many Requests) en intento {attempt + 1}. Esperando {wait_time:.2f} segundos...")
+                await asyncio.sleep(wait_time)
+            else:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Error en consulta a Loki (estado {e.response.status_code}): {str(e)}"
+                )
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Error al contactar Loki tras {max_retries} intentos: {str(e)}"
+                )
+            wait_time = base_delay * (2 ** attempt) + random.uniform(0, 0.1)
+            print(f"Error en consulta a Loki en intento {attempt + 1}: {str(e)}. Esperando {wait_time:.2f} segundos...")
+            await asyncio.sleep(wait_time)
+    return {}  # Fallback (no debería llegar aquí debido a la excepción)
 
 # --- INICIO: Código de la versión más completa de controllers/logs.py ---
 
@@ -309,14 +351,16 @@ async def websocket_fail2ban_logs_stream_v2(
 
 @router.get("/fail2ban/banned-ips")
 async def get_banned_ips(
-    page: int = Query(0, ge=0, description="Número de página."),
-    size: int = Query(10, ge=1, le=100, description="Tamaño de página."),
+    page: int = Query(0, ge=0, description="Número de página"),
+    size: int = Query(10, ge=1, le=100, description="Tamaño de página"),
     hours: int = Query(24, ge=1, le=168, description="Rango de tiempo en horas hacia atrás")
-):
+) -> dict:
+    # Calcular rango de tiempo
     start_time_sec = int(time.time()) - (hours * 3600)
     start_ns = start_time_sec * 1_000_000_000
     end_ns = int(time.time()) * 1_000_000_000
 
+    # Consultas LogQL
     params_ban = {
         "query": '{job="fail2ban", level="NOTICE"} |= "Ban"',
         "start": str(start_ns),
@@ -334,25 +378,29 @@ async def get_banned_ips(
 
     async with AsyncClient(timeout=10.0) as client:
         try:
-            ban_task = query_loki_with_retry(client, settings.LOKI_QUERY_URL, params=params_ban)
-            unban_task = query_loki_with_retry(client, settings.LOKI_QUERY_URL, params=params_unban)
+            # Ejecutar consultas con reintentos
+            ban_task = query_loki_with_retry(client, f"{settings.LOKI_QUERY_URL}?{urlencode(params_ban)}")
+            unban_task = query_loki_with_retry(client, f"{settings.LOKI_QUERY_URL}?{urlencode(params_unban)}")
             ban_response, unban_response = await asyncio.gather(ban_task, unban_task)
         except Exception as exc:
             raise HTTPException(status_code=503, detail=f"Error al contactar Loki: {str(exc)}")
 
-    ban_results = ban_response.get("data", {}).get("result", []) if ban_response else []
-    unban_results = unban_response.get("data", {}).get("result", []) if unban_response else []
+    # Procesar resultados
+    ban_results = ban_response.get("data", {}).get("result", [])
+    unban_results = unban_response.get("data", {}).get("result", [])
 
     ban_entries = []
     unban_ips = set()
     ip_pattern = re.compile(r"(?:Ban|already banned|Banned)\s+(\d{1,3}(?:\.\d{1,3}){3})")
 
+    # Procesar desbaneos
     for stream in unban_results:
         for ts, line in stream.get("values", []):
             match = re.search(r"Unban\s+(\d{1,3}(?:\.\d{1,3}){3})", line)
             if match:
                 unban_ips.add(match.group(1))
 
+    # Procesar baneos
     for stream in ban_results:
         jail = stream.get("stream", {}).get("jail", "desconocido")
         for ts, line in stream.get("values", []):
@@ -376,6 +424,7 @@ async def get_banned_ips(
                 "raw_log": line
             })
 
+    # Verificar IPs actualmente baneadas en Fail2ban
     currently_banned_ips = set()
     jails = {entry["jail"] for entry in ban_entries if entry["jail"] != "desconocido"}
     for jail in jails:
@@ -383,6 +432,7 @@ async def get_banned_ips(
 
     filtered_entries = [entry for entry in ban_entries if entry["ip"] in currently_banned_ips]
 
+    # Paginación
     total_count = len(filtered_entries)
     start_idx = page * size
     end_idx = start_idx + size
