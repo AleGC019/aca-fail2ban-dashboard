@@ -275,12 +275,34 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
+        
       - name: Verify Jira variables
         run: |
-          if [ -z "${{ secrets.JIRA_USER_EMAIL }}" ] || [ -z "${{ secrets.JIRA_API_TOKEN }}" ] || [ -z "${{ secrets.JIRA_PROJECT_KEY }}" ] || [ -z "${{ secrets.JIRA_BASE_URL }}" ]; then
-            echo "ERROR: Jira credentials not set" && exit 1
+          missing_vars=""
+          
+          if [ -z "${{ secrets.JIRA_USER_EMAIL }}" ]; then
+            missing_vars="$missing_vars JIRA_USER_EMAIL"
           fi
+          
+          if [ -z "${{ secrets.JIRA_API_TOKEN }}" ]; then
+            missing_vars="$missing_vars JIRA_API_TOKEN"
+          fi
+          
+          if [ -z "${{ secrets.JIRA_PROJECT_KEY }}" ]; then
+            missing_vars="$missing_vars JIRA_PROJECT_KEY"
+          fi
+          
+          if [ -z "${{ secrets.JIRA_BASE_URL }}" ]; then
+            missing_vars="$missing_vars JIRA_BASE_URL"
+          fi
+          
+          if [ -n "$missing_vars" ]; then
+            echo "ERROR: Missing Jira secrets:$missing_vars"
+            echo "Please configure these secrets in GitHub Settings → Secrets and variables → Actions"
+            exit 1
+          fi
+          
+          echo "✅ All Jira secrets are configured"
 
       - name: Notify Jira with CI report
         run: |
