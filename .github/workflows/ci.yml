@@ -278,10 +278,15 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Verify Jira variables
+        env:
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
         run: |
           missing_vars=""
           for var in JIRA_USER_EMAIL JIRA_API_TOKEN JIRA_PROJECT_KEY JIRA_BASE_URL; do
-            if [ -z "${{ secrets[$var] }}" ]; then
+            if [ -z "${!var}" ]; then
               missing_vars="$missing_vars $var"
             fi
           done
