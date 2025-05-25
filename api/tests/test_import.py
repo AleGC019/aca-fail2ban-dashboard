@@ -5,7 +5,6 @@ from unittest.mock import patch
 def test_health_endpoint():
     """Test health endpoint"""
     from main import app
-    Test Jira 
     client = TestClient(app)
     response = client.get("/health")
     assert response.status_code == 200
