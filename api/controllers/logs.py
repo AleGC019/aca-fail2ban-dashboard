@@ -18,6 +18,8 @@ from urllib.parse import urlencode
 from starlette.websockets import WebSocketState
 from collections import defaultdict, Counter
 import json
+import httpx
+from urllib.parse import quote
 
 # Importaciones necesarias que podrían faltar según el contexto completo
 # Asegúrate de que estas u otras dependencias necesarias estén aquí si las usas en otras partes del archivo
@@ -369,176 +371,79 @@ async def get_filtered_logs(
 
 
 @router.get("/fail2ban/stats", summary="Fail2ban statistics overview")
-async def get_stats(
-    start: Optional[int] = Query(None, description="Start of time window (UNIX timestamp, seconds). Default: 1 hour ago."),
-    end: Optional[int] = Query(None, description="End of time window (UNIX timestamp, seconds). Default: now.")
-):
-    """
-    Retorna estadísticas de Fail2ban para un intervalo dado,
-    analizando los logs directamente para encontrar:
-    - Cantidad de Logs (comparado con la hora pasada)
-    - Tasa de parseo (% de logs que cayeron en un match con action o jail vs. total)
-    - Cantidad de eventos de baneo
-    - Cantidad de Logs con (WARNING+ERROR)
-    También calcula delta (%) comparado con el período anterior.
-    """
+async def get_fail2ban_stats():
+    loki_query_url = "http://loki:3100/loki/api/v1/query_range"
+    end_time = int(time.time())  # Tiempo actual en segundos (UNIX timestamp)
+    start_time_current = end_time - 3600  # Hace 1 hora
+    start_time_previous = end_time - 7200  # Hace 2 horas
 
-    now = int(time.time())
-    if end is None:
-        end = now
-    if start is None:
-        start = end - 3600
+    queries = [
+        # Logs en la última hora
+        'sum(count_over_time({job="fail2ban"} [1h]))',
+        # Logs en la hora anterior
+        'sum(count_over_time({job="fail2ban"} [1h] offset 1h))',
+        # Logs con "action" o "jail" en la última hora
+        'sum(count_over_time({job="fail2ban"} |~ "action|jail" [1h]))',
+        # Eventos de baneo en la última hora
+        'sum(count_over_time({job="fail2ban"} |= "Ban" [1h]))',
+        # Logs con "WARNING" o "ERROR" en la última hora
+        'sum(count_over_time({job="fail2ban"} |~ "WARNING|ERROR" [1h]))'
+    ]
 
-    MIN_WINDOW = 60
-    MAX_WINDOW = 3600
-    window = end - start
-    if window < MIN_WINDOW:
-        start = end - MIN_WINDOW
-        window = MIN_WINDOW
-    elif window > MAX_WINDOW:
-        start = end - MAX_WINDOW
-        window = MAX_WINDOW
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # Consultas para la hora actual (última hora)
+            tasks_current = [
+                client.get(
+                    f"{loki_query_url}?query={quote(queries[0])}&start={start_time_current}&end={end_time}&step=3600"),
+                client.get(
+                    f"{loki_query_url}?query={quote(queries[2])}&start={start_time_current}&end={end_time}&step=3600"),
+                client.get(
+                    f"{loki_query_url}?query={quote(queries[3])}&start={start_time_current}&end={end_time}&step=3600"),
+                client.get(
+                    f"{loki_query_url}?query={quote(queries[4])}&start={start_time_current}&end={end_time}&step=3600")
+            ]
+            # Consulta para la hora anterior
+            task_previous = client.get(
+                f"{loki_query_url}?query={quote(queries[1])}&start={start_time_previous}&end={start_time_current}&step=3600"
+            )
 
-    prev_start = start - window
-    prev_end = start
+            # Ejecutar todas las consultas concurrentemente
+            responses = await asyncio.gather(*tasks_current, task_previous)
 
-    async def query_total_logs(s: int, e: int):
-        """Consulta todos los logs para contar el total"""
-        params = {
-            "query": '{job="fail2ban"}',
-            "start": str(s * 1_000_000_000),
-            "end": str(e * 1_000_000_000),
-            "limit": 10000,
-            "direction": "forward"
+        results = []
+        for resp in responses:
+            if resp.status_code == 200:
+                data = resp.json()
+                if data["data"]["resultType"] == "matrix" and data["data"]["result"]:
+                    # Tomar el valor más reciente de la serie temporal
+                    value = float(data["data"]["result"][0]["values"][-1][1])
+                    results.append(value)
+                else:
+                    results.append(0.0)  # Si no hay datos, devolver 0
+            else:
+                raise ValueError(f"Query failed with status {resp.status_code}")
+
+        # Asignar resultados
+        logs_current, matched_logs, ban_events, warn_error_logs = results[0], results[1], results[2], results[3]
+        logs_previous = results[4]
+
+        # Calcular métricas
+        logs_difference = logs_current - logs_previous
+        parse_rate = (matched_logs / logs_current) * 100 if logs_current > 0 else 0
+
+        # Formato de respuesta JSON
+        stats_json = {
+            "logs_difference": logs_difference,
+            "parse_rate": parse_rate,
+            "ban_events": ban_events,
+            "warn_error_logs": warn_error_logs
         }
-        async with AsyncClient() as client:
-            try:
-                res = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=10.0)
-                res.raise_for_status()
-                data = res.json().get("data", {}).get("result", [])
-                total_count = 0
-                for stream in data:
-                    total_count += len(stream.get("values", []))
-                return total_count
-            except Exception as exc:
-                print(f"Error querying total logs: {exc}")
-                return 0
 
-    async def query_matched_logs(s: int, e: int):
-        """Consulta logs que contienen actions o jails específicos"""
-        params = {
-            "query": '{job="fail2ban"} |~ "(Found|Ban|Unban|\\[\\w+\\])"',
-            "start": str(s * 1_000_000_000),
-            "end": str(e * 1_000_000_000),
-            "limit": 10000,
-            "direction": "forward"
-        }
-        async with AsyncClient() as client:
-            try:
-                res = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=10.0)
-                res.raise_for_status()
-                data = res.json().get("data", {}).get("result", [])
-                matched_count = 0
-                for stream in data:
-                    matched_count += len(stream.get("values", []))
-                return matched_count
-            except Exception as exc:
-                print(f"Error querying matched logs: {exc}")
-                return 0
+        return stats_json
 
-    async def query_ban_events(s: int, e: int):
-        """Consulta eventos de baneo"""
-        params = {
-            "query": '{job="fail2ban"} |= "Ban"',
-            "start": str(s * 1_000_000_000),
-            "end": str(e * 1_000_000_000),
-            "limit": 10000,
-            "direction": "forward"
-        }
-        async with AsyncClient() as client:
-            try:
-                res = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=10.0)
-                res.raise_for_status()
-                data = res.json().get("data", {}).get("result", [])
-                ban_count = 0
-                for stream in data:
-                    ban_count += len(stream.get("values", []))
-                return ban_count
-            except Exception as exc:
-                print(f"Error querying ban events: {exc}")
-                return 0
-
-    async def query_warning_error_logs(s: int, e: int):
-        """Consulta logs con WARNING o ERROR"""
-        params = {
-            "query": '{job="fail2ban"} |~ "(WARNING|ERROR)"',
-            "start": str(s * 1_000_000_000),
-            "end": str(e * 1_000_000_000),
-            "limit": 10000,
-            "direction": "forward"
-        }
-        async with AsyncClient() as client:
-            try:
-                res = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=10.0)
-                res.raise_for_status()
-                data = res.json().get("data", {}).get("result", [])
-                warning_error_count = 0
-                for stream in data:
-                    warning_error_count += len(stream.get("values", []))
-                return warning_error_count
-            except Exception as exc:
-                print(f"Error querying warning/error logs: {exc}")
-                return 0
-
-    # Realizar todas las consultas en paralelo para ambos períodos
-    current_results = await asyncio.gather(
-        query_total_logs(start, end),
-        query_matched_logs(start, end),
-        query_ban_events(start, end),
-        query_warning_error_logs(start, end)
-    )
-    
-    previous_results = await asyncio.gather(
-        query_total_logs(prev_start, prev_end),
-        query_matched_logs(prev_start, prev_end),
-        query_ban_events(prev_start, prev_end),
-        query_warning_error_logs(prev_start, prev_end)
-    )
-
-    # Extraer resultados
-    current_total, current_matched, current_bans, current_warning_error = current_results
-    prev_total, prev_matched, prev_bans, prev_warning_error = previous_results
-
-    # Calcular tasa de parseo
-    current_parse_rate = (current_matched / current_total * 100) if current_total > 0 else 0
-    prev_parse_rate = (prev_matched / prev_total * 100) if prev_total > 0 else 0
-
-    def with_delta(current: int, previous: int):
-        if current is None:
-            return {"value": None, "deltaPct": None}
-        if previous in (None, 0):
-            return {"value": current, "deltaPct": None}
-        delta = round(((current - previous) / previous) * 100, 2)
-        return {"value": current, "deltaPct": delta}
-
-    def with_delta_float(current: float, previous: float):
-        if current is None:
-            return {"value": None, "deltaPct": None}
-        if previous in (None, 0):
-            return {"value": round(current, 2), "deltaPct": None}
-        delta = round(((current - previous) / previous) * 100, 2)
-        return {"value": round(current, 2), "deltaPct": delta}
-
-    return {
-        "overview": {
-            "totalLogs": with_delta(current_total, prev_total),
-            "parseRate": with_delta_float(current_parse_rate, prev_parse_rate),
-            "banEvents": with_delta(current_bans, prev_bans),
-            "warningErrorLogs": with_delta(current_warning_error, prev_warning_error),
-        },
-        "windowSeconds": window,
-        "note": "If any value is null, it means the query failed or logs were unavailable."
-    }
+    except Exception as e:
+        return {"error": str(e)}
 
 
 # --- FIN: Código de la versión más completa de controllers/logs.py ---
