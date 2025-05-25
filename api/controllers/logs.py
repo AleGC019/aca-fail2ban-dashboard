@@ -4,7 +4,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPExcept
 from httpx import AsyncClient, RequestError, HTTPStatusError
 # --- CAMBIO AQUÍ ---
 # Se importa LOKI_QUERY_URL directamente, no 'settings'
-from api.services.fail2ban import get_currently_banned_ips
+from services.fail2ban import get_currently_banned_ips
 from configuration.settings import settings
 # -------------------
 import asyncio
