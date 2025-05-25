@@ -265,3 +265,51 @@ jobs:
 
       - name: Teardown Docker
         run: docker compose down -v --remove-orphans --rmi local
+# ...existing code...
+
+  notify-jira:
+    name: Stage 8 - Notify Jira
+    needs: [cleanup]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine pipeline status
+        id: status
+        run: |
+          if [[ "${{ needs.lint.result }}" == "success" && 
+                "${{ needs.build.result }}" == "success" && 
+                "${{ needs.test.result }}" == "success" && 
+                "${{ needs.unit-tests.result }}" == "success" && 
+                "${{ needs.integration-check.result }}" == "success" ]]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "emoji=✅" >> $GITHUB_OUTPUT
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "emoji=❌" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send Jira notification
+        env:
+            JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+            JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+            JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
+            JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+
+        run: |
+          if [[ "${{ steps.status.outputs.status }}" == "failure" ]]; then
+            curl -X POST \
+              -H "Content-Type: application/json" \
+              -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+              -d '{
+                "fields": {
+                  "project": {"key": "'$JIRA_PROJECT_KEY'"},
+                  "summary": "❌ CI Pipeline Failed - ${{ github.workflow }}",
+                  "description": "Pipeline failed for repository ${{ github.repository }}\n\n*Details:*\n• Branch: ${{ github.ref_name }}\n• Commit: ${{ github.sha }}\n• Author: ${{ github.actor }}\n• Run ID: ${{ github.run_id }}\n\n[View Failed Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})",
+                  "issuetype": {"name": "Bug"}
+                }
+              }' \
+              "$JIRA_URL/rest/api/3/issue"
+          fi
