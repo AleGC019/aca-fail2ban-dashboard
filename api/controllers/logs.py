@@ -92,53 +92,6 @@ async def query_loki_with_retry_banned_ips(client: AsyncClient, url: str, max_re
             await asyncio.sleep(wait_time)
     return {}
 
-def parse_fail2ban_log(file_path: str, ip: str, hours: int, jail: str) -> List[Dict]:
-    """
-    Lee y parsea el archivo de log de Fail2ban para encontrar eventos de baneo de una IP específica.
-    """
-    entries = []
-    end_time = time.time()
-    start_time = end_time - (hours * 3600)
-    
-    # Regex para capturar timestamp, jail, y mensaje de baneo
-    log_pattern = re.compile(
-        r'^(?P<timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d{3})\s+'
-        r'.*?\[(?P<pid>\d+)\]:\s+(?P<level>\w+)\s+\[(?P<jail>[^\]]+)\]\s+'
-        r'(?P<msg>(?:[Bb][Aa][Nn](?:ned)?|already banned)\s+' + re.escape(ip) + r')'
-    )
-    
-    try:
-        with open(file_path, 'r') as f:
-            for line in f:
-                match = log_pattern.match(line)
-                if not match:
-                    continue
-                
-                log_time_str = match.group('timestamp')
-                log_jail = match.group('jail')
-                msg = match.group('msg')
-                
-                # Parsear timestamp
-                try:
-                    log_time = datetime.strptime(log_time_str, '%Y-%m-%d %H:%M:%S,%f').timestamp()
-                except ValueError:
-                    continue
-                
-                # Filtrar por jail y rango de tiempo
-                if log_jail == jail and start_time <= log_time <= end_time:
-                    entries.append({
-                        "ip": ip,
-                        "jail": jail,
-                        "ban_time": datetime.fromtimestamp(log_time).strftime('%Y-%m-%d %H:%M:%S'),
-                        "failed_attempts": 1,  # Placeholder
-                        "raw_log": line.strip()
-                    })
-                    break  # Solo tomar el evento de baneo más reciente
-    except Exception as e:
-        print(f"Error al leer {file_path}: {str(e)}")
-    
-    return entries
-
 # --- INICIO: Código de la versión más completa de controllers/logs.py ---
 
 # nueva version del websocket, con los nuevos parametros solicitados
@@ -394,7 +347,7 @@ async def get_banned_ips(
     jail: str = Query("sshd", description="Nombre del jail de Fail2ban")
 ) -> dict:
     """
-    Obtiene IPs actualmente baneadas y sus logs de baneo desde /var/log/fail2ban.log o Loki.
+    Obtiene IPs actualmente baneadas y sus logs de baneo desde Loki.
     """
     # Verificar si el jail existe
     if not jail_exists(jail):
@@ -418,68 +371,74 @@ async def get_banned_ips(
             "values": []
         }
 
-    # Procesar logs para cada IP
+    # Regex para validar el formato del log y extraer el timestamp
+    log_pattern = re.compile(
+        r'(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d{3})\s+'
+        r'fail2ban\.actions\s*\[\d+\]:\s+NOTICE\s+\[([^\]]+)\]\s+'
+        r'(?:[Bb][Aa][Nn](?:ned)?|already banned)\s+(\S+)'
+    )
+
+    # Consultar Loki para cada IP
     ban_entries = []
-    log_file = "/var/log/fail2ban.log"
+    start_time_sec = int(time.time()) - (hours * 3600)
+    start_ns = start_time_sec * 1_000_000_000
+    end_ns = int(time.time()) * 1_000_000_000
 
-    for ip in currently_banned_ips:
-        # Intentar leer desde el archivo de log
-        entries = parse_fail2ban_log(log_file, ip, hours, jail)
-        
-        if entries:
-            ban_entries.extend(entries)
-        else:
-            print(f"No se encontraron logs de baneo para IP {ip} en {log_file}, intentando con Loki")
-            # Fallback a Loki
-            start_time_sec = int(time.time()) - (hours * 3600)
-            start_ns = start_time_sec * 1_000_000_000
-            end_ns = int(time.time()) * 1_000_000_000
-
+    async with AsyncClient(timeout=10.0) as client:
+        for ip in currently_banned_ips:
+            # Consulta específica para la IP
             params_ban = {
-                "query": f'{{job="fail2ban", jail="{jail}"}} |= "{ip}" |= "[Bb][Aa][Nn](?:ned)?"',
+                "query": f'{{job="fail2ban", jail="{jail}"}} |= "{ip}" |~ "[Bb][Aa][Nn](?:ned)?|already banned"',
                 "start": str(start_ns),
                 "end": str(end_ns),
-                "limit": 1,
+                "limit": 1,  # Solo el log más reciente
                 "direction": "backward",
             }
 
-            async with AsyncClient(timeout=10.0) as client:
-                try:
-                    ban_response = await query_loki_with_retry_banned_ips(client, f"{settings.LOKI_QUERY_URL}?{urlencode(params_ban)}")
-                    ban_results = ban_response.get("data", {}).get("result", [])
+            try:
+                ban_response = await query_loki_with_retry(client, f"{settings.LOKI_QUERY_URL}?{urlencode(params_ban)}")
+                ban_results = ban_response.get("data", {}).get("result", [])
 
-                    if ban_results:
-                        for stream in ban_results:
-                            for ts, line in stream.get("values", []):
-                                ban_time_ns = int(ts)
-                                ban_time_str = datetime.utcfromtimestamp(ban_time_ns / 1_000_000_000).strftime('%Y-%m-%d %H:%M:%S')
-                                ban_entries.append({
-                                    "ip": ip,
-                                    "jail": jail,
-                                    "ban_time": ban_time_str,
-                                    "failed_attempts": 1,
-                                    "raw_log": line
-                                })
-                                break
-                            break
-                    else:
-                        print(f"No se encontraron logs de baneo para IP {ip} en Loki")
-                        ban_entries.append({
-                            "ip": ip,
-                            "jail": jail,
-                            "ban_time": datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
-                            "failed_attempts": 1,
-                            "raw_log": "No disponible (log no encontrado)"
-                        })
-                except Exception as exc:
-                    print(f"Error al consultar Loki para IP {ip}: {str(exc)}")
+                if ban_results:
+                    for stream in ban_results:
+                        for ts, line in stream.get("values", []):
+                            # Validar el formato del log
+                            match = log_pattern.match(line.strip())
+                            if match:
+                                timestamp_str, log_jail, log_ip = match.groups()
+                                if log_jail == jail and log_ip == ip:
+                                    ban_time = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S,%f').strftime('%Y-%m-%d %H:%M:%S')
+                                    ban_entries.append({
+                                        "ip": ip,
+                                        "jail": jail,
+                                        "ban_time": ban_time,
+                                        "failed_attempts": 1,  # Placeholder
+                                        "raw_log": line.strip()
+                                    })
+                                    print(f"Log de baneo encontrado para IP {ip}: {line.strip()}")
+                                    break
+                            else:
+                                print(f"Log no coincide con el formato esperado para IP {ip}: {line.strip()}")
+                        if ban_entries and ban_entries[-1]["ip"] == ip:
+                            break  # Log encontrado, pasar a la siguiente IP
+                else:
+                    print(f"No se encontraron logs de baneo para IP {ip} en Loki")
                     ban_entries.append({
                         "ip": ip,
                         "jail": jail,
                         "ban_time": datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
                         "failed_attempts": 1,
-                        "raw_log": "Error al consultar Loki"
+                        "raw_log": "No disponible (log no encontrado)"
                     })
+            except Exception as exc:
+                print(f"Error al consultar Loki para IP {ip}: {str(exc)}")
+                ban_entries.append({
+                    "ip": ip,
+                    "jail": jail,
+                    "ban_time": datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+                    "failed_attempts": 1,
+                    "raw_log": f"Error al consultar Loki: {str(exc)}"
+                })
 
     # Paginación
     total_count = len(ban_entries)
