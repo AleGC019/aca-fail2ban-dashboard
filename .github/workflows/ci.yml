@@ -143,15 +143,38 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Python environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('api/requirements.txt') }}
+
+      - name: Install dependencies
         run: |
-          python3 -m pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install -r api/requirements.txt
-          pip install pytest
+
+      - name: Set environment variables for tests
+        run: |
+          echo "LOKI_QUERY_URL=http://test:3100/api/v1/query_range" >> $GITHUB_ENV
 
       - name: Run unit tests
         run: |
           cd api
-          PYTHONPATH=. pytest tests -q
+          PYTHONPATH=. python -m pytest tests/ -v --tb=short
+        env:
+          LOKI_QUERY_URL: http://test:3100/api/v1/query_range
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: api/test-results.xml
 
   # security-scan:
   #   name: Stage 5 - Security Scans
