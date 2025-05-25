@@ -8,11 +8,11 @@ def test_jails_controller_import():
     assert router is not None
 
 @patch.dict('os.environ', {'LOKI_QUERY_URL': 'http://loki:3100/api/v1/query_range'})
-@patch('services.fail2ban.is_valid_ip')
-@patch('services.fail2ban.jail_exists')
-@patch('services.fail2ban.is_ip_banned')
 @patch('services.fail2ban.run_fail2ban_command')
-def test_ban_ip_success(mock_run_command, mock_is_banned, mock_jail_exists, mock_is_valid_ip):
+@patch('services.fail2ban.is_ip_banned')
+@patch('services.fail2ban.jail_exists')
+@patch('services.fail2ban.is_valid_ip')
+def test_ban_ip_success(mock_is_valid_ip, mock_jail_exists, mock_is_banned, mock_run_command):
     """Test successful IP ban"""
     mock_is_valid_ip.return_value = True
     mock_jail_exists.return_value = True
@@ -33,11 +33,11 @@ def test_ban_ip_success(mock_run_command, mock_is_banned, mock_jail_exists, mock
     assert "baneada" in data["message"]
 
 @patch.dict('os.environ', {'LOKI_QUERY_URL': 'http://loki:3100/api/v1/query_range'})
-@patch('services.fail2ban.is_valid_ip')
-@patch('services.fail2ban.jail_exists')
-@patch('services.fail2ban.is_ip_banned')
 @patch('services.fail2ban.run_fail2ban_command')
-def test_unban_ip_success(mock_run_command, mock_is_banned, mock_jail_exists, mock_is_valid_ip):
+@patch('services.fail2ban.is_ip_banned')
+@patch('services.fail2ban.jail_exists')
+@patch('services.fail2ban.is_valid_ip')
+def test_unban_ip_success(mock_is_valid_ip, mock_jail_exists, mock_is_banned, mock_run_command):
     """Test successful IP unban"""
     mock_is_valid_ip.return_value = True
     mock_jail_exists.return_value = True
@@ -96,10 +96,10 @@ def test_ban_ip_invalid_jail(mock_jail_exists, mock_is_valid_ip):
     assert "no existe" in data["detail"]
 
 @patch.dict('os.environ', {'LOKI_QUERY_URL': 'http://loki:3100/api/v1/query_range'})
-@patch('services.fail2ban.is_valid_ip')
-@patch('services.fail2ban.jail_exists')
 @patch('services.fail2ban.is_ip_banned')
-def test_ban_ip_already_banned(mock_is_banned, mock_jail_exists, mock_is_valid_ip):
+@patch('services.fail2ban.jail_exists')
+@patch('services.fail2ban.is_valid_ip')
+def test_ban_ip_already_banned(mock_is_valid_ip, mock_jail_exists, mock_is_banned):
     """Test ban IP that is already banned"""
     mock_is_valid_ip.return_value = True
     mock_jail_exists.return_value = True
@@ -119,10 +119,10 @@ def test_ban_ip_already_banned(mock_is_banned, mock_jail_exists, mock_is_valid_i
     assert "ya está baneada" in data["message"]
 
 @patch.dict('os.environ', {'LOKI_QUERY_URL': 'http://loki:3100/api/v1/query_range'})
-@patch('services.fail2ban.is_valid_ip')
-@patch('services.fail2ban.jail_exists')
 @patch('services.fail2ban.is_ip_banned')
-def test_unban_ip_not_banned(mock_is_banned, mock_jail_exists, mock_is_valid_ip):
+@patch('services.fail2ban.jail_exists')
+@patch('services.fail2ban.is_valid_ip')
+def test_unban_ip_not_banned(mock_is_valid_ip, mock_jail_exists, mock_is_banned):
     """Test unban IP that is not banned"""
     mock_is_valid_ip.return_value = True
     mock_jail_exists.return_value = True
