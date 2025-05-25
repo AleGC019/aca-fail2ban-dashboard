@@ -20,6 +20,7 @@ from collections import defaultdict, Counter
 import json
 import httpx
 from urllib.parse import quote
+import random
 
 # Importaciones necesarias que podrían faltar según el contexto completo
 # Asegúrate de que estas u otras dependencias necesarias estén aquí si las usas en otras partes del archivo
@@ -369,6 +370,35 @@ async def get_filtered_logs(
         "values": paginated,
     }
 
+async def query_loki_with_retry(client, url, max_retries=3, base_delay=1):
+    """
+    Función auxiliar para realizar una consulta a Loki con reintentos y backoff exponencial.
+    
+    :param client: Instancia de httpx.AsyncClient
+    :param url: URL completa de la consulta a Loki
+    :param max_retries: Número máximo de reintentos
+    :param base_delay: Retraso base en segundos para el backoff exponencial
+    :return: Respuesta JSON de Loki o None si falla después de los reintentos
+    """
+    for attempt in range(max_retries):
+        try:
+            response = await client.get(url)
+            if response.status_code == 200:
+                return response.json()
+            elif response.status_code == 429:
+                # Calcular el tiempo de espera con backoff exponencial y jitter
+                wait_time = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                print(f"Recibido 429. Esperando {wait_time:.2f} segundos antes de reintentar...")
+                await asyncio.sleep(wait_time)
+            else:
+                raise ValueError(f"Query failed with status {response.status_code}")
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise e
+            wait_time = base_delay * (2 ** attempt) + random.uniform(0, 1)
+            print(f"Error en la consulta: {e}. Esperando {wait_time:.2f} segundos antes de reintentar...")
+            await asyncio.sleep(wait_time)
+    return None
 
 @router.get("/fail2ban/stats", summary="Fail2ban statistics overview")
 async def get_fail2ban_stats():
@@ -392,55 +422,45 @@ async def get_fail2ban_stats():
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            # Consultas para la hora actual (última hora)
-            tasks_current = [
-                client.get(
-                    f"{loki_query_url}?query={quote(queries[0])}&start={start_time_current}&end={end_time}&step=3600"),
-                client.get(
-                    f"{loki_query_url}?query={quote(queries[2])}&start={start_time_current}&end={end_time}&step=3600"),
-                client.get(
-                    f"{loki_query_url}?query={quote(queries[3])}&start={start_time_current}&end={end_time}&step=3600"),
-                client.get(
-                    f"{loki_query_url}?query={quote(queries[4])}&start={start_time_current}&end={end_time}&step=3600")
+            # Crear URLs para cada consulta
+            urls = [
+                f"{loki_query_url}?query={quote(queries[0])}&start={start_time_current}&end={end_time}&step=3600",
+                f"{loki_query_url}?query={quote(queries[1])}&start={start_time_previous}&end={start_time_current}&step=3600",
+                f"{loki_query_url}?query={quote(queries[2])}&start={start_time_current}&end={end_time}&step=3600",
+                f"{loki_query_url}?query={quote(queries[3])}&start={start_time_current}&end={end_time}&step=3600",
+                f"{loki_query_url}?query={quote(queries[4])}&start={start_time_current}&end={end_time}&step=3600"
             ]
-            # Consulta para la hora anterior
-            task_previous = client.get(
-                f"{loki_query_url}?query={quote(queries[1])}&start={start_time_previous}&end={start_time_current}&step=3600"
-            )
 
-            # Ejecutar todas las consultas concurrentemente
-            responses = await asyncio.gather(*tasks_current, task_previous)
+            # Ejecutar todas las consultas con reintentos
+            tasks = [query_loki_with_retry(client, url) for url in urls]
+            results = await asyncio.gather(*tasks)
 
-        results = []
-        for resp in responses:
-            if resp.status_code == 200:
-                data = resp.json()
-                if data["data"]["resultType"] == "matrix" and data["data"]["result"]:
+            # Procesar los resultados
+            processed_results = []
+            for result in results:
+                if result and result["data"]["resultType"] == "matrix" and result["data"]["result"]:
                     # Tomar el valor más reciente de la serie temporal
-                    value = float(data["data"]["result"][0]["values"][-1][1])
-                    results.append(value)
+                    value = float(result["data"]["result"][0]["values"][-1][1])
+                    processed_results.append(value)
                 else:
-                    results.append(0.0)  # Si no hay datos, devolver 0
-            else:
-                raise ValueError(f"Query failed with status {resp.status_code}")
+                    processed_results.append(0.0)  # Si no hay datos, devolver 0
 
-        # Asignar resultados
-        logs_current, matched_logs, ban_events, warn_error_logs = results[0], results[1], results[2], results[3]
-        logs_previous = results[4]
+            # Asignar resultados
+            logs_current, logs_previous, matched_logs, ban_events, warn_error_logs = processed_results
 
-        # Calcular métricas
-        logs_difference = logs_current - logs_previous
-        parse_rate = (matched_logs / logs_current) * 100 if logs_current > 0 else 0
+            # Calcular métricas
+            logs_difference = logs_current - logs_previous
+            parse_rate = (matched_logs / logs_current) * 100 if logs_current > 0 else 0
 
-        # Formato de respuesta JSON
-        stats_json = {
-            "logs_difference": logs_difference,
-            "parse_rate": parse_rate,
-            "ban_events": ban_events,
-            "warn_error_logs": warn_error_logs
-        }
+            # Formato de respuesta JSON
+            stats_json = {
+                "logs_difference": logs_difference,
+                "parse_rate": parse_rate,
+                "ban_events": ban_events,
+                "warn_error_logs": warn_error_logs
+            }
 
-        return stats_json
+            return stats_json
 
     except Exception as e:
         return {"error": str(e)}
