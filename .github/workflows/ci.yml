@@ -73,45 +73,66 @@ jobs:
         env:
           DOCKER_BUILDKIT: 1
 
-  test:
-    name: Stage 3 - Integration Testing
+  integration-tests:
+    name: Stage 3 - Integration & Flow Test
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Create environment file
+      - name: Create environment and mock log
         run: |
           cp .env.example .env || echo "No .env.example found, creating new .env file"
           echo "FAIL2BAN_LOG_PATH=${{ env.FAIL2BAN_LOG_PATH }}" >> .env
           echo "FAIL2BAN_LOG_PATH=${{ env.FAIL2BAN_LOG_PATH }}" >> $GITHUB_ENV
+          mkdir -p "$(dirname \"${{ env.FAIL2BAN_LOG_PATH}}\")"
+          touch "${{ env.FAIL2BAN_LOG_PATH}}"
 
       - name: Start service stack
         run: docker compose up -d --build
 
-      - name: Diagnóstico de volúmenes
+      - name: Volume diagnostics
         run: |
-          echo "--- Diagnóstico de Docker ---"
+          echo "--- Docker Diagnostics ---"
           docker compose ps
           docker compose config | grep FAIL2BAN_LOG_PATH
-          docker exec promtail ls -la ${{ env.FAIL2BAN_LOG_PATH }} || echo "No se pudo acceder al archivo dentro de promtail"
+          docker exec promtail ls -la ${{ env.FAIL2BAN_LOG_PATH }} || echo "Could not access the file inside promtail"
           docker exec promtail cat /etc/promtail/promtail.yaml | grep FAIL2BAN_LOG_PATH
+          ls -la ${{ env.FAIL2BAN_LOG_PATH }} || echo "The file no longer exists on the host"
 
-          # Verificar que el archivo sigue existiendo
-          ls -la ${{ env.FAIL2BAN_LOG_PATH }} || echo "El archivo ya no existe en el host"
+      - name: Docker container status
+        run: |
+          echo "--- Docker PS ---"
+          docker ps -a
+          echo "--- Docker Compose Config (resolved) ---"
+          docker compose config
+          echo "--- Promtail container logs (early) ---"
+          docker compose logs promtail
+          echo "--- API container logs (early) ---"
+          docker compose logs api
+
+      - name: Inject synthetic log line
+        run: |
+          TS=$(date -u '+%Y-%m-%d %H:%M:%S')
+          echo "${TS},123 fail2ban.filter [5678]: INFO [sshd] Starting" > "${{ env.FAIL2BAN_LOG_PATH}}"
+          echo "${TS},123 fail2ban.actions [1234]: NOTICE [sshd] Ban 80.94.95.112" >> "${{ env.FAIL2BAN_LOG_PATH}}"
+
+      - name: Show mock log content
+        run: |
+          echo "--- Content of ${{ env.FAIL2BAN_LOG_PATH }} on host ---"
+          cat "${{ env.FAIL2BAN_LOG_PATH }}"
 
       - name: Wait for API health check
         run: |
           MAX_ATTEMPTS=15
           INTERVAL=10
-
           for attempt in $(seq 1 $MAX_ATTEMPTS); do
             if curl --fail --silent --max-time 10 http://localhost:8000/health; then
               echo "✅ API is healthy (attempt $attempt/$MAX_ATTEMPTS)"
-              exit 0
+              break
             fi
-            
             echo "⏳ Attempt $attempt/$MAX_ATTEMPTS failed, retrying in ${INTERVAL}s..."
             if [ $attempt -eq $MAX_ATTEMPTS ]; then
               echo "❌ API health check failed after $MAX_ATTEMPTS attempts"
@@ -124,8 +145,6 @@ jobs:
       - name: Verify Loki service health
         run: |
           echo "🔍 Verifying Loki service..."
-
-          # Wait for Loki to be ready
           for i in {1..30}; do
             if curl --fail --silent --max-time 5 http://localhost:3100/ready; then
               echo "✅ Loki is ready"
@@ -134,16 +153,27 @@ jobs:
             echo "⏳ Waiting for Loki... ($i/30)"
             sleep 2
           done
-
-          # Verify API endpoints
           echo "🧪 Testing Loki endpoints..."
           curl --fail http://localhost:3100/metrics > /dev/null || exit 1
           curl --fail http://localhost:3100/loki/api/v1/status/buildinfo > /dev/null || exit 1
           echo "✅ All Loki endpoints responding"
 
+      - name: Check log via API
+        run: |
+          sleep 10
+          echo "--- Checking logs in API ---"
+          response=$(curl --fail "http://localhost:8000/fail2ban/logs?limit=100")
+          echo "API Response:"
+          echo "$response" | jq .
+          echo "$response" | grep -q "80.94.95.112" || (echo "Expected IP not found in logs" && exit 1)
+
       - name: Display service logs
         run: docker compose logs --no-color
         if: always()
+
+      - name: Debug on failure
+        if: failure()
+        run: docker compose logs
 
   unit-tests:
     name: Stage 4 - Unit Tests
@@ -243,115 +273,9 @@ jobs:
           name: test-results
           path: api/test-results.xml
 
-  # security-scan:
-  #   name: Stage 5 - Security Scans
-  #   needs: build
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - name: Checkout repository
-  #       uses: actions/checkout@v4
-
-  #     - name: Create environment file
-  #       run: |
-  #         cp .env.example .env
-  #         echo "FAIL2BAN_LOG_PATH=/tmp/fail2ban.log" >> .env
-
-  #     - name: Build API image for scanning
-  #       run: docker build -t fail2ban-api:latest ./api
-
-  #     - name: pip-audit
-  #       run: |
-  #         pip install pip-audit
-  #         pip-audit -r api/requirements.txt
-
-  #     - name: Docker image scan (Trivy)
-  #       uses: aquasecurity/trivy-action@0.24.0
-  #       with:
-  #         image-ref: "fail2ban-api:latest"
-  #         format: "table"
-  #         exit-code: "1"
-
-  integration-check:
-    name: Stage 5 - Integration Flow Test
-    needs: test
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Create environment and mock log
-        run: |
-          # Create the environment file
-          cp .env.example .env
-          echo "FAIL2BAN_LOG_PATH=${{ env.FAIL2BAN_LOG_PATH }}" >> .env
-
-          # Create the directory if it doesn't exist
-          mkdir -p "$(dirname "${{ env.FAIL2BAN_LOG_PATH}}")"
-
-          # Create the file
-          touch "${{ env.FAIL2BAN_LOG_PATH}}"
-
-      - name: Start service stack
-        run: docker compose up -d --build
-
-      - name: Docker container status
-        run: |
-          echo "--- Docker PS ---"
-          docker ps -a
-          echo "--- Docker Compose Config (resolved) ---"
-          docker compose config
-          echo "--- Promtail container logs (early) ---"
-          docker compose logs promtail
-          echo "--- API container logs (early) ---"
-          docker compose logs api
-
-      - name: Inject synthetic log line
-        run: |
-          TS=$(date -u '+%Y-%m-%d %H:%M:%S')
-          echo "${TS},123 fail2ban.filter [5678]: INFO [sshd] Starting" > "${{ env.FAIL2BAN_LOG_PATH}}"
-          echo "${TS},123 fail2ban.actions [1234]: NOTICE [sshd] Ban 80.94.95.112" >> "${{ env.FAIL2BAN_LOG_PATH}}"
-          
-      - name: Show mock log content
-        run: |
-          echo "--- Content of ${{ env.FAIL2BAN_LOG_PATH }} on host ---"
-          cat "${{ env.FAIL2BAN_LOG_PATH }}"
-
-      - name: Wait for API health check
-        run: |
-          attempt=1
-          max_attempts=10
-          until curl -v --fail http://localhost:8000/health || [ $attempt -eq $max_attempts ]; do
-            echo "Attempt $attempt/$max_attempts: Waiting for API to be ready..."
-            sleep 5
-            ((attempt++))
-          done
-
-      - name: Check log via API
-        run: |
-          sleep 10
-          echo "--- Checking logs in API ---"
-
-          # Check logs and verify response
-          response=$(curl --fail "http://localhost:8000/fail2ban/logs?limit=100")
-
-          echo "--- API container logs (late) ---"
-          docker compose logs api
-
-          # Try to query Loki directly
-          curl -v -G --data-urlencode 'query={job="fail2ban"}' http://localhost:3100/loki/api/v1/query
-
-          echo "API Response:"
-          echo "$response" | jq .
-          echo "$response" | grep -q "80.94.95.112" || (echo "Expected IP not found in logs" && exit 1)
-
-      - name: Debug on failure
-        if: failure()
-        run: docker compose logs
-
   cleanup:
-    name: Stage 6 - Cleanup
-    needs: [unit-tests, integration-check]
+    name: Stage 5 - Cleanup
+    needs: [unit-tests, integration-tests]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -368,8 +292,8 @@ jobs:
         run: docker compose down -v --remove-orphans --rmi local
 
   notify-github:
-    name: Stage 7 - Create GitHub Issue
-    needs: [cleanup, lint, build, test, unit-tests, integration-check]
+    name: Stage 6 - Create GitHub Issue
+    needs: [cleanup, lint, build, unit-tests, integration-tests]
     runs-on: ubuntu-latest
     if: always()
     permissions:
@@ -385,9 +309,8 @@ jobs:
         run: |
           if [ "${{ needs.lint.result }}" == "success" ]       &&
              [ "${{ needs.build.result }}" == "success" ]      &&
-             [ "${{ needs.test.result }}" == "success" ]       &&
+             [ "${{ needs.integration-tests.result }}" == "success" ] &&
              [ "${{ needs.unit-tests.result }}" == "success" ] &&
-             [ "${{ needs.integration-check.result }}" == "success" ] &&
              [ "${{ needs.cleanup.result }}" == "success" ]; then
             echo "status=✅ SUCCESS" >> "$GITHUB_OUTPUT"
           else
@@ -416,9 +339,8 @@ jobs:
           # Per-stage results
           export LINT_STATUS='${{ needs.lint.result }}'
           export BUILD_STATUS='${{ needs.build.result }}'
-          export TEST_STATUS='${{ needs.test.result }}'
+          export INTEGRATION_STATUS='${{ needs.integration-tests.result }}'
           export UNIT_STATUS='${{ needs.unit-tests.result }}'
-          export INTEGRATION_STATUS='${{ needs.integration-check.result }}'
           export CLEANUP_STATUS='${{ needs.cleanup.result }}'
 
           export COVERAGE='${{ needs.unit-tests.outputs.coverage }}'
@@ -444,9 +366,9 @@ jobs:
             ${{ github.event_name }}
 
   notify-jira:
-    name: Stage 8 - Notify Jira
+    name: Stage 7 - Notify Jira
     environment: JIRA
-    needs: [cleanup, lint, build, test, unit-tests, integration-check]
+    needs: [cleanup, lint, build, unit-tests, integration-tests]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -479,28 +401,26 @@ jobs:
           JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
           JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
         run: |
-          # Determinar el estado del pipeline basado en todos los jobs
           if [[ "${{ needs.lint.result }}" == "success" && \
                 "${{ needs.build.result }}" == "success" && \
-                "${{ needs.test.result }}" == "success" && \
+                "${{ needs.integration-tests.result }}" == "success" && \
                 "${{ needs.unit-tests.result }}" == "success" && \
-                "${{ needs.integration-check.result }}" == "success" && \
                 "${{ needs.cleanup.result }}" == "success" ]]; then
-            STATUS="✅ EXITOSO"
-            echo "✅ Pipeline completado exitosamente"
+            STATUS="✅ SUCCESSFUL"
+            echo "✅ Pipeline completed successfully"
           else
-            STATUS="❌ FALLIDO" 
-            echo "❌ Pipeline falló - Revisar etapas individuales"
-            echo "Estados: lint=${{ needs.lint.result }}, build=${{ needs.build.result }}, test=${{ needs.test.result }}, unit-tests=${{ needs.unit-tests.result }}, integration-check=${{ needs.integration-check.result }}, cleanup=${{ needs.cleanup.result }}"
+            STATUS="❌ FAILED" 
+            echo "❌ Pipeline failed - Check individual stages"
+            echo "Status: lint=${{ needs.lint.result }}, build=${{ needs.build.result }}, integration-tests=${{ needs.integration-tests.result }}, unit-tests=${{ needs.unit-tests.result }}, cleanup=${{ needs.cleanup.result }}"
           fi
 
-          # Crear descripción detallada
+          # Create detailed description
           curl -X POST -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
             -H "Content-Type: application/json" \
             --data '{
               "fields": {
-                "project": { "key": "'"$JIRA_PROJECT_KEY"'" },
-                "summary": "CI Pipeline '"$STATUS"' - '"${{ github.workflow }}"' en '"${{ github.ref_name }}"'",
+                "project": { "key": "'$JIRA_PROJECT_KEY'" },
+                "summary": "CI Pipeline '$STATUS' - '${{ github.workflow }}' on '${{ github.ref_name }}'",
                 "description": {
                   "type": "doc",
                   "version": 1,
@@ -511,7 +431,7 @@ jobs:
                       "content": [
                         {
                           "type": "text",
-                          "text": "Resumen del Pipeline"
+                          "text": "Pipeline Summary"
                         }
                       ]
                     },
@@ -520,7 +440,7 @@ jobs:
                       "content": [
                         {
                           "type": "text",
-                          "text": "Estado: '"$STATUS"'"
+                          "text": "Status: '$STATUS'"
                         }
                       ]
                     },
@@ -529,7 +449,7 @@ jobs:
                       "content": [
                         {
                           "type": "text",
-                          "text": "Rama: '"${{ github.ref_name }}"'"
+                          "text": "Branch: '${{ github.ref_name }}'"
                         }
                       ]
                     },
@@ -538,7 +458,7 @@ jobs:
                       "content": [
                         {
                           "type": "text",
-                          "text": "Evento: '"${{ github.event_name }}"'"
+                          "text": "Event: '${{ github.event_name }}'"
                         }
                       ]
                     },
@@ -547,7 +467,7 @@ jobs:
                       "content": [
                         {
                           "type": "text",
-                          "text": "Commit: '"${{ github.sha }}"'"
+                          "text": "Commit: '${{ github.sha }}'"
                         }
                       ]
                     },
@@ -556,7 +476,7 @@ jobs:
                       "content": [
                         {
                           "type": "text",
-                          "text": "Autor: '"${{ github.actor }}"'"
+                          "text": "Author: '${{ github.actor }}'"
                         }
                       ]
                     },
@@ -565,7 +485,7 @@ jobs:
                       "content": [
                         {
                           "type": "text",
-                          "text": "Mensaje del commit: '"${{ github.event.head_commit.message }}"'"
+                          "text": "Commit message: '${{ github.event.head_commit.message }}'"
                         }
                       ]
                     },
@@ -575,7 +495,7 @@ jobs:
                       "content": [
                         {
                           "type": "text",
-                          "text": "Etapas del Pipeline"
+                          "text": "Pipeline Stages"
                         }
                       ]
                     },
@@ -593,7 +513,7 @@ jobs:
                       "content": [
                         {
                           "type": "text",
-                          "text": "'"${{ needs.build.result == 'success' && '✅' || '❌' }}"' Stage 2 - Container Build"
+                          "text": "'${{ needs.build.result == 'success' && '✅' || '❌' }}' Stage 2 - Container Build"
                         }
                       ]
                     },
@@ -602,7 +522,7 @@ jobs:
                       "content": [
                         {
                           "type": "text",
-                          "text": "'"${{ needs.test.result == 'success' && '✅' || '❌' }}"' Stage 3 - Integration Testing"
+                          "text": "'${{ needs.integration-tests.result == 'success' && '✅' || '❌' }}' Stage 3 - Integration & Flow Test"
                         }
                       ]
                     },
@@ -611,7 +531,7 @@ jobs:
                       "content": [
                         {
                           "type": "text",
-                          "text": "'"${{ needs.unit-tests.result == 'success' && '✅' || '❌' }}"' Stage 4 - Unit Tests"
+                          "text": "'${{ needs.unit-tests.result == 'success' && '✅' || '❌' }}' Stage 4 - Unit Tests"
                         }
                       ]
                     },
@@ -620,16 +540,7 @@ jobs:
                       "content": [
                         {
                           "type": "text",
-                          "text": "'"${{ needs.integration-check.result == 'success' && '✅' || '❌' }}"' Stage 5 - Integration Flow Test"
-                        }
-                      ]
-                    },
-                    {
-                      "type": "paragraph",
-                      "content": [
-                        {
-                          "type": "text",
-                          "text": "'"${{ needs.cleanup.result == 'success' && '✅' || '❌' }}"' Stage 6 - Cleanup"
+                          "text": "'${{ needs.cleanup.result == 'success' && '✅' || '❌' }}' Stage 5 - Cleanup"
                         }
                       ]
                     },
@@ -639,7 +550,7 @@ jobs:
                       "content": [
                         {
                           "type": "text",
-                          "text": "Enlaces"
+                          "text": "Links"
                         }
                       ]
                     },
@@ -648,16 +559,16 @@ jobs:
                       "content": [
                         {
                           "type": "text",
-                          "text": "Ver pipeline: "
+                          "text": "View pipeline: "
                         },
                         {
                           "type": "text",
-                          "text": "'"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"'",
+                          "text": "'${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'",
                           "marks": [
                             {
                               "type": "link",
                               "attrs": {
-                                "href": "'"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"'"
+                                "href": "'${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'"
                               }
                             }
                           ]
@@ -669,16 +580,16 @@ jobs:
                       "content": [
                         {
                           "type": "text",
-                          "text": "Ver commit: "
+                          "text": "View commit: "
                         },
                         {
                           "type": "text",
-                          "text": "'"${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"'",
+                          "text": "'${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}'",
                           "marks": [
                             {
                               "type": "link",
                               "attrs": {
-                                "href": "'"${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"'"
+                                "href": "'${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}'"
                               }
                             }
                           ]
@@ -691,8 +602,8 @@ jobs:
                 "labels": [ 
                   "ci-pipeline", 
                   "fail2ban-dashboard", 
-                  "'"${{ github.ref_name }}"'",
-                  "'"${{ github.event_name }}"'"
+                  "'${{ github.ref_name }}'",
+                  "'${{ github.event_name }}'"
                 ]
               }
             }' \

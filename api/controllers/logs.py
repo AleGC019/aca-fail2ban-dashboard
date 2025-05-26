@@ -593,17 +593,10 @@ async def get_filtered_logs(
         "end": str(end * 1_000_000_000),
     }
 
-    # Just before the "async with AsyncClient() as client:" block - TODO: Remove this
-    print(f"Attempting to query Loki. URL: {settings.LOKI_QUERY_URL}, Params: {params}")
-
     async with AsyncClient() as client:
         try:
             response = await client.get(settings.LOKI_QUERY_URL, params=params, timeout=10.0)
             response.raise_for_status()
-            # TODO: Remove this
-            loki_response_json = response.json()
-            print(f"Raw Loki response: {loki_response_json}")
-            results = loki_response_json.get("data", {}).get("result", [])
         except (RequestError, HTTPStatusError) as exc:
             raise HTTPException(status_code=503, detail=f"Error al contactar Loki: {str(exc)}")
 
@@ -612,9 +605,7 @@ async def get_filtered_logs(
 
     for stream in results:
         service_name = stream.get("stream", {}).get("job", "desconocido")
-        print(f"Processing stream: {stream.get('stream')}") # TODO: Remove this
-        for ts, line in stream.get("values", []):
-            print(f"Processing line - TS: {ts}, Line: '{line.strip()}'") # TODO: Remove this
+        for ts, line in stream.get("values", []):   
             timestamp = datetime.fromtimestamp(int(ts) / 1_000_000_000)
             readable_date = timestamp.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -669,8 +660,6 @@ async def get_filtered_logs(
                 "importance": importance,
                 "message": line.strip()
             })
-
-            print(f"  IP Found: {ip}, Level Found: {log_level}, Event Found: {event_type}") # TODO: Remove this
 
     all_values.sort(key=lambda x: x["timestamp"], reverse=True)
 
