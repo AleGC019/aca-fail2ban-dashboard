@@ -282,11 +282,15 @@ jobs:
 
       - name: Create environment and mock log
         run: |
+          # Create the environment file
           cp .env.example .env
           echo "FAIL2BAN_LOG_PATH=${{ env.FAIL2BAN_LOG_PATH }}" >> .env
 
           # Create the directory if it doesn't exist
-          mkdir -p $(dirname ${{ env.FAIL2BAN_LOG_PATH }})
+          mkdir -p "$(dirname "${{ env.FAIL2BAN_LOG_PATH}}")"
+
+          # Create the file
+          touch "${{ env.FAIL2BAN_LOG_PATH}}"
 
       - name: Start service stack
         run: docker compose up -d --build
