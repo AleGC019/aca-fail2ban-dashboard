@@ -323,7 +323,7 @@ jobs:
           echo "--- Verificación de logs en API ---"
 
           # Verificar si el archivo existe en el contenedor API
-          docker exec api ls -la ${{ env.FAIL2BAN_LOG_PATH }} || echo "Log no visible en contenedor API"
+          docker exec fail2ban-api ls -la ${{ env.FAIL2BAN_LOG_PATH }} || echo "Log no visible en contenedor API"
 
           # Verificar estado de Loki/Promtail
           docker exec promtail ps aux | grep promtail
