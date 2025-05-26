@@ -4,19 +4,17 @@ server:
   log_level: debug
 
 positions:
-  filename: /tmp/positions.yaml
+  filename: /etc/promtail/positions.yaml
 
 clients:
-  # Make sure this env-var resolves to
-  #   http://127.0.0.1:3100/loki/api/v1/push
-  - url: ${LOKI_PUSH_URL}
+  - url: http://loki:3100/loki/api/v1/push
 
 scrape_configs:
   - job_name: fail2ban
     static_configs:
       - targets: [localhost]
         labels:
-          __path__: ${FAIL2BAN_LOG_PATH}
+          __path__: /var/log/fail2ban.log
     pipeline_stages:
       - multiline:
           firstline: '^\d{4}-\d{2}-\d{2}'
@@ -26,7 +24,7 @@ scrape_configs:
       - timestamp:
           source: time
           format: '2006-01-02 15:04:05'
-          location: Local             # or "UTC" if the machine runs UTC
+          location: Local
       - labels:
           time: time
           component: component

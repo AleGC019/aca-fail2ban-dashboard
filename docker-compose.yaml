@@ -12,7 +12,7 @@ x-common-opts: &common-opts
 
 services:
   loki:
-    image: grafana/loki:2.9.7          # fija la versión; 3.x exige otra sintaxis
+    image: grafana/loki:2.9.7
     container_name: loki
     <<: *common-opts
     ports:
@@ -21,24 +21,22 @@ services:
       - "-config.expand-env=true"
       - "-config.file=/etc/loki/local-config.yaml"
     volumes:
-      # datos binarios y índices
       - loki_data:${LOKI_STORAGE_PATH:-/loki}
-      # configuración que escribiste antes
       - ./loki/config.yaml:/etc/loki/local-config.yaml:ro
 
   promtail:
     image: grafana/promtail:2.9.7
     container_name: promtail
     <<: *common-opts
-    depends_on: [loki]
+    depends_on:
+      - loki
     command:
       - "-config.expand-env=true"
       - "-config.file=/etc/promtail/promtail.yaml"
     volumes:
-      # tu promtail.yaml (el “bueno” de la respuesta anterior)
       - ./promtail/promtail.yaml:/etc/promtail/promtail.yaml:ro
-      # monta el log real de fail2ban en la misma ruta que espera promtail
       - ${FAIL2BAN_LOG_PATH}:${FAIL2BAN_LOG_PATH}:ro
+      - promtail_positions:/etc/promtail
 
   api:
     build:
@@ -46,14 +44,14 @@ services:
       dockerfile: Dockerfile
     container_name: fail2ban-api
     <<: *common-opts
-    depends_on: [loki]
+    depends_on:
+      - loki
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
-      # acceso de lectura / escritura al socket para ban/unban
       - /var/run/fail2ban/fail2ban.sock:/var/run/fail2ban/fail2ban.sock
-      # si tu API necesita mirar el mismo log, móntalo también:
-      # - ${FAIL2BAN_LOG_PATH}:${FAIL2BAN_LOG_PATH}:ro
+      - ${FAIL2BAN_LOG_PATH}:${FAIL2BAN_LOG_PATH}:ro
 
 volumes:
   loki_data:
+  promtail_positions:
