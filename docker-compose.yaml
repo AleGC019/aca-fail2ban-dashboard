@@ -3,9 +3,12 @@ version: '3.8'
 x-common-opts: &common-opts
   restart: unless-stopped
   env_file: [.env]
+  environment:
+    - TZ
   volumes:
     - /etc/localtime:/etc/localtime:ro
     - /etc/timezone:/etc/timezone:ro
+    - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
 
 services:
   loki:
