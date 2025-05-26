@@ -33,20 +33,15 @@ def test_websocket_connection(mock_get):
     from main import app
     client = TestClient(app)
     
-    try:
-        with client.websocket_connect("/ws/fail2ban-logs") as websocket:
-            # Test that connection is established
-            assert websocket is not None
-            
-            # Test receiving initial data
-            data = websocket.receive_json()
-            # Should receive either logs data or error message
-            assert isinstance(data, dict)
-            assert "logs" in data or "error" in data or "type" in data
-    except Exception:
-        # If websocket fails, it's likely due to async issues in test environment
-        # This is acceptable for unit tests - integration tests will catch real issues
-        pass
+    with client.websocket_connect("/ws/fail2ban-logs") as websocket:
+        # Test that connection is established
+        assert websocket is not None
+        
+        # Test receiving initial data
+        data = websocket.receive_json()
+        # Should receive either logs data or error message
+        assert isinstance(data, dict)
+        assert "logs" in data or "error" in data or "type" in data
 
 
 @patch.dict('os.environ', {'LOKI_QUERY_URL': 'http://loki:3100/api/v1/query_range'})
