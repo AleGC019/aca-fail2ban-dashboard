@@ -285,20 +285,16 @@ jobs:
           cp .env.example .env
           echo "FAIL2BAN_LOG_PATH=${{ env.FAIL2BAN_LOG_PATH }}" >> .env
 
-          # Verificar el directorio
+          # Create the directory if it doesn't exist
           mkdir -p $(dirname ${{ env.FAIL2BAN_LOG_PATH }})
-
-          # Crear el archivo de log y verificar
-          echo 'May 24 19:00:00 server fail2ban[1234]: INFO [sshd] Starting' > ${{ env.FAIL2BAN_LOG_PATH }}
-          cat ${{ env.FAIL2BAN_LOG_PATH }}
 
       - name: Start service stack
         run: docker compose up -d --build
 
       - name: Inject synthetic log line
         run: |
-          echo "2025-05-26 19:00:00,123 fail2ban.filter [1234]: INFO [sshd] Starting" > ${{ env.FAIL2BAN_LOG_PATH }}
-          echo "2025-05-26 20:00:00,123 fail2ban.actions [1234]: NOTICE [sshd] Ban 1.2.3.4" >> ${{ env.FAIL2BAN_LOG_PATH }}
+          echo "2025-05-26 19:00:00,456 fail2ban.filter [5678]: INFO [sshd] Starting" > ${{ env.FAIL2BAN_LOG_PATH }}
+          echo "2025-05-26 20:00:00,123 fail2ban.actions [1234]: NOTICE [sshd] Ban 80.94.95.112" >> ${{ env.FAIL2BAN_LOG_PATH }}
           cat ${{ env.FAIL2BAN_LOG_PATH }}
 
       - name: Wait for API health check
@@ -314,11 +310,11 @@ jobs:
       - name: Check log via API
         run: |
           sleep 10
-          echo "--- Verificación de logs en API ---"
+          echo "--- Checking logs in API ---"
 
-          # Consultar los logs y verificar respuesta
+          # Check logs and verify response
           response=$(curl --fail "http://localhost:8000/fail2ban/logs?limit=10")
-          echo "Respuesta API:"
+          echo "API Response:"
           echo "$response" | jq .
           echo "$response" | grep -q "1.2.3.4" || (echo "Expected IP not found in logs" && exit 1)
 
@@ -376,7 +372,7 @@ jobs:
         id: render_issue
         shell: bash
         run: |
-          TEMPLATE='.github/ISSUE_TEMPLATES/ci-pipeline-notification.md'
+          TEMPLATE='.github/ISSUE_TEMPLATES/ci-pipeline-template.md'
           OUT='issue-body.md'
 
           # Export variables for replacement
