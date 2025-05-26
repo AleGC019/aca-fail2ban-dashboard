@@ -1,0 +1,40 @@
+[run]
+source = .
+omit = 
+    tests/*
+    __pycache__/*
+    */__pycache__/*
+    venv/*
+    .venv/*
+    */venv/*
+    */.venv/*
+    setup.py
+    */migrations/*
+    static/*
+    templates/*
+
+[report]
+# Excluir líneas que no deben ser cubiertas
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    if self.debug:
+    if settings.DEBUG
+    raise AssertionError
+    raise NotImplementedError
+    if 0:
+    if __name__ == "__main__":
+    class .*\(Protocol\):
+    @(abc\.)?abstractmethod
+
+# Mostrar líneas faltantes
+show_missing = True
+
+# Precisión de porcentajes
+precision = 2
+
+# Fallar si la cobertura es menor al 60%
+fail_under = 60
+
+[html]
+directory = htmlcov
