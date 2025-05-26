@@ -335,14 +335,40 @@ jobs:
           # Replacement using Perl (keeps newlines, handles missing vars)
           perl -pe 's/\{\{(\w+)\}\}/$ENV{$1}/ge' "$TEMPLATE" > "$OUT"
 
+      - name: Download coverage artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-report # Artifact name from unit-tests job
+          # By default, files are restored to their original paths relative to GITHUB_WORKSPACE.
+          # So api/coverage_comment.md will be at $GITHUB_WORKSPACE/api/coverage_comment.md
+
       # 3. Prepare Issue body with coverage
       - name: Prepare Issue body with coverage
         run: |
+          # ADVISORY: The next line overwrites 'issue-body.md' which was created by the 'Render Issue template' step.
+          # This could lead to loss of substitutions (e.g., for STATUS, WORKFLOW) if not intended.
+          # Consider modifying this logic to process the existing 'issue-body.md' (output of 'Render Issue template')
+          # instead of re-copying the original template here.
           cp .github/ISSUE_TEMPLATES/ci-pipeline-template.md issue-body.md
-          # Insert the coverage comment into the template
-          COVERAGE_COMMENT=$(cat api/coverage_comment.md)
-          # Use Perl to replace the placeholder with the actual coverage comment (preserving newlines)
-          perl -0777 -pe "s/\{\{COVERAGE_COMMENT\}\}/\Q$COVERAGE_COMMENT\E/s" issue-body.md > issue-body-final.md
+
+          COVERAGE_COMMENT_TEXT="N/A (Coverage data not found)" # Default text
+          COVERAGE_FILE_PATH="api/coverage_comment.md"
+
+          if [ -f "$COVERAGE_FILE_PATH" ]; then
+            if [ -s "$COVERAGE_FILE_PATH" ]; then # Check if file is not empty
+              COVERAGE_COMMENT_TEXT=$(cat "$COVERAGE_FILE_PATH")
+            else
+              echo "Warning: $COVERAGE_FILE_PATH is empty."
+              COVERAGE_COMMENT_TEXT="Coverage report generated but is empty."
+            fi
+          else
+            echo "Warning: $COVERAGE_FILE_PATH not found after attempting to download artifact. Using default text for coverage."
+          fi
+
+          # Use an environment variable to pass the coverage comment to Perl.
+          # This is generally safer for multi-line strings or strings with special characters.
+          export COVERAGE_COMMENT_TO_INSERT="$COVERAGE_COMMENT_TEXT"
+          perl -0777 -pe 's/\{\{COVERAGE_COMMENT\}\}/\Q$ENV{COVERAGE_COMMENT_TO_INSERT}\E/sg' issue-body.md > issue-body-final.md
 
       # 4. Create (or comment-on) the Issue
       - name: Create Issue from file
@@ -471,23 +497,23 @@ jobs:
                     },
                     {
                       type: "paragraph",
-                      content: [{ type: "text", text: ((($lint == "success")? "✅" : "❌") + " Stage 1 - Code Quality Check (Lint)") }]
+                      content: [{ type: "text", text: ((if $lint == "success" then "✅" else "❌" end) + " Stage 1 - Code Quality Check (Lint)") }]
                     },
                     {
                       type: "paragraph",
-                      content: [{ type: "text", text: ((($build == "success")? "✅" : "❌") + " Stage 2 - Container Build") }]
+                      content: [{ type: "text", text: ((if $build == "success" then "✅" else "❌" end) + " Stage 2 - Container Build") }]
                     },
                     {
                       type: "paragraph",
-                      content: [{ type: "text", text: ((($integration == "success")? "✅" : "❌") + " Stage 3 - Integration & Flow Test") }]
+                      content: [{ type: "text", text: ((if $integration == "success" then "✅" else "❌" end) + " Stage 3 - Integration & Flow Test") }]
                     },
                     {
                       type: "paragraph",
-                      content: [{ type: "text", text: ((($unit == "success")? "✅" : "❌") + " Stage 4 - Unit Tests") }]
+                      content: [{ type: "text", text: ((if $unit == "success" then "✅" else "❌" end) + " Stage 4 - Unit Tests") }]
                     },
                     {
                       type: "paragraph",
-                      content: [{ type: "text", text: ((($cleanup == "success")? "✅" : "❌") + " Stage 5 - Cleanup") }]
+                      content: [{ type: "text", text: ((if $cleanup == "success" then "✅" else "❌" end) + " Stage 5 - Cleanup") }]
                     },
                     {
                       type: "heading",
