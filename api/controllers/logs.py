@@ -390,6 +390,7 @@ async def get_banned_ips(
         for ip in currently_banned_ips:
             # Consulta específica para la IP con el formato exacto
             params_ban = {
+                # TODO: arreglar esto
                 "query": f'{{job="fail2ban", jail="{jail}"}} |= "{ip}" |= "NOTICE" |= "Ban"',
                 "start": str(start_ns),
                 "end": str(end_ns),
