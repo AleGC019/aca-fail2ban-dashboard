@@ -279,7 +279,12 @@ jobs:
     name: Stage 6 - Create GitHub Issue
     needs: [cleanup, lint, build, unit-tests, integration-tests]
     runs-on: ubuntu-latest
-    if: always()
+    if: |
+      "${{ needs.lint.result }}" != 'success' ||
+      "$needs.build.result" != 'success' ||
+      needs.integration-tests.result != 'success' ||
+      needs.unit-tests.result != 'success' ||
+      needs.cleanup.result != 'success'
     permissions:
       issues: write
       contents: read
@@ -345,7 +350,7 @@ jobs:
       - name: Prepare Issue body with coverage
         run: |
           COVERAGE_COMMENT_TEXT="N/A (Coverage data not found)"
-          COVERAGE_FILE_PATH="api/coverage_comment.md"
+          COVERAGE_FILE_PATH="coverage_comment.md"
 
           if [ -f "$COVERAGE_FILE_PATH" ]; then
             if [ -s "$COVERAGE_FILE_PATH" ]; then

@@ -12,14 +12,13 @@
 <details>
 <summary>Stage results</summary>
 
-| Stage                | Status |
-|----------------------|--------|
-| Lint                 | {{LINT_STATUS}} |
-| Container Build      | {{BUILD_STATUS}} |
-| Integration Testing  | {{TEST_STATUS}} |
-| Unit Tests           | {{UNIT_STATUS}} |
-| Integration Flow     | {{INTEGRATION_STATUS}} |
-| Cleanup              | {{CLEANUP_STATUS}} |
+| Stage                   | Status             |
+|-------------------------|--------------------|
+| Code Quality Check      | {{LINT_STATUS}}    |
+| Container Build         | {{BUILD_STATUS}}   |
+| Integration & Flow Test | {{INTEGRATION_STATUS}} |
+| Unit Tests              | {{UNIT_STATUS}}    |
+| Cleanup                 | {{CLEANUP_STATUS}} |
 
 </details>
 
