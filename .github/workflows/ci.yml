@@ -322,23 +322,12 @@ jobs:
         run: |
           sleep 10
           echo "--- Verificación de logs en API ---"
-
-          # Verificar estado de Loki/Promtail
-          docker exec promtail ps aux | grep promtail
-          docker exec loki ps aux | grep loki
-
-          # Consultar API directamente
-          curl -v "http://localhost:8000/health"
-
+          
           # Consultar los logs y verificar respuesta
           response=$(curl --fail "http://localhost:8000/fail2ban/logs?limit=10")
           echo "Respuesta API:"
           echo "$response" | jq .
           echo "$response" | grep -q "1.2.3.4" || (echo "Expected IP not found in logs" && exit 1)
-
-          # Verificar logs en Loki directamente
-          echo "--- Consultando Loki directamente ---"
-          curl -s "http://localhost:3100/loki/api/v1/query_range?query=%7Bjob%3D%22fail2ban%22%7D&limit=10" | jq .
 
       - name: Debug on failure
         if: failure()
