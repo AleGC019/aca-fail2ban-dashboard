@@ -419,8 +419,8 @@ jobs:
             -H "Content-Type: application/json" \
             --data '{
               "fields": {
-                "project": { "key": "'$JIRA_PROJECT_KEY'" },
-                "summary": "CI Pipeline '$STATUS' - '${{ github.workflow }}' on '${{ github.ref_name }}'",
+                "project": { "key": "'"$JIRA_PROJECT_KEY"'" },
+                "summary": "CI Pipeline '"$STATUS"' - '"${{ github.workflow }}"' on '"${{ github.ref_name }}"'",
                 "description": {
                   "type": "doc",
                   "version": 1,
@@ -440,7 +440,7 @@ jobs:
                       "content": [
                         {
                           "type": "text",
-                          "text": "Status: '$STATUS'"
+                          "text": "Status: '"$STATUS"'"
                         }
                       ]
                     },
@@ -449,7 +449,7 @@ jobs:
                       "content": [
                         {
                           "type": "text",
-                          "text": "Branch: '${{ github.ref_name }}'"
+                          "text": "Branch: '"${{ github.ref_name }}"'"
                         }
                       ]
                     },
@@ -458,7 +458,7 @@ jobs:
                       "content": [
                         {
                           "type": "text",
-                          "text": "Event: '${{ github.event_name }}'"
+                          "text": "Event: '"${{ github.event_name }}"'"
                         }
                       ]
                     },
@@ -467,7 +467,7 @@ jobs:
                       "content": [
                         {
                           "type": "text",
-                          "text": "Commit: '${{ github.sha }}'"
+                          "text": "Commit: '"${{ github.sha }}"'"
                         }
                       ]
                     },
@@ -476,7 +476,7 @@ jobs:
                       "content": [
                         {
                           "type": "text",
-                          "text": "Author: '${{ github.actor }}'"
+                          "text": "Author: '"${{ github.actor }}"'"
                         }
                       ]
                     },
@@ -485,7 +485,7 @@ jobs:
                       "content": [
                         {
                           "type": "text",
-                          "text": "Commit message: '${{ github.event.head_commit.message }}'"
+                          "text": "Commit message: ''"${{ github.event.head_commit.message }}"'"
                         }
                       ]
                     },
@@ -563,12 +563,12 @@ jobs:
                         },
                         {
                           "type": "text",
-                          "text": "'${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'",
+                          "text": "'"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"'",
                           "marks": [
                             {
                               "type": "link",
                               "attrs": {
-                                "href": "'${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'"
+                                "href": "'"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"'"
                               }
                             }
                           ]
@@ -584,12 +584,12 @@ jobs:
                         },
                         {
                           "type": "text",
-                          "text": "'${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}'",
+                          "text": "'"${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"'",
                           "marks": [
                             {
                               "type": "link",
                               "attrs": {
-                                "href": "'${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}'"
+                                "href": "'"${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"'"
                               }
                             }
                           ]
@@ -602,8 +602,8 @@ jobs:
                 "labels": [ 
                   "ci-pipeline", 
                   "fail2ban-dashboard", 
-                  "'${{ github.ref_name }}'",
-                  "'${{ github.event_name }}'"
+                  "'"${{ github.ref_name }}"'",
+                  "'"${{ github.event_name }}"'"
                 ]
               }
             }' \
