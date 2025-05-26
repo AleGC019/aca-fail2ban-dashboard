@@ -7,25 +7,29 @@ positions:
   filename: /tmp/positions.yaml
 
 clients:
+  # Make sure this env-var resolves to
+  #   http://127.0.0.1:3100/loki/api/v1/push
   - url: ${LOKI_PUSH_URL}
 
 scrape_configs:
   - job_name: fail2ban
     static_configs:
-      - targets:
-          - localhost
+      - targets: [localhost]
         labels:
-          job: fail2ban
-          __path__: /var/log/fail2ban.log
+          __path__: ${FAIL2BAN_LOG_PATH}
     pipeline_stages:
       - multiline:
           firstline: '^\d{4}-\d{2}-\d{2}'
+          max_wait_time: 3s
       - regex:
           expression: >
-            ^(?P<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+\s+fail2ban\.(?P<component>\S+)\s+\[(?P<pid>\d+)\]:\s+(?P<level>\S+)(?:\s+\[(?P<jail>[^\]]+)\])?\s+(?P<msg>.*)$
+            ^(?P<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+\s+
+            fail2ban\.(?P<component>\S+)\s+\[(?P<pid>\d+)\]:\s+
+            (?P<level>\S+)(?:\s+\[(?P<jail>[^\]]+)\])?\s+(?P<msg>.*)$
       - timestamp:
           source: time
           format: '2006-01-02 15:04:05'
+          location: Local             # or "UTC" if the machine runs UTC
       - labels:
           component: component
           pid: pid

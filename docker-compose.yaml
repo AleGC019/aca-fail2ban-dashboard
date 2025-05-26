@@ -1,60 +1,56 @@
 version: '3.8'
 
+x-common-opts: &common-opts
+  restart: unless-stopped
+  env_file: [.env]
+  volumes:
+    - /etc/localtime:/etc/localtime:ro
+    - /etc/timezone:/etc/timezone:ro
+
 services:
   loki:
-    image: grafana/loki:2.9.7 # Se recomienda fijar una versión específica en lugar de :latest
+    image: grafana/loki:2.9.7          # fija la versión; 3.x exige otra sintaxis
     container_name: loki
+    <<: *common-opts
     ports:
       - "${LOKI_PORT:-3100}:3100"
-    env_file:
-      - .env
-    volumes:
-      - loki_data:${LOKI_STORAGE_PATH:-/loki}
-      - ./loki/config.yaml:/etc/loki/local-config.yaml:ro
-      - /etc/localtime:/etc/localtime:ro
-      - /etc/timezone:/etc/timezone:ro
     command:
       - "-config.expand-env=true"
       - "-config.file=/etc/loki/local-config.yaml"
-    restart: unless-stopped
+    volumes:
+      # datos binarios y índices
+      - loki_data:${LOKI_STORAGE_PATH:-/loki}
+      # configuración que escribiste antes
+      - ./loki/config.yaml:/etc/loki/local-config.yaml:ro
 
   promtail:
-    image: grafana/promtail:2.9.7 # Se recomienda fijar una versión específica
+    image: grafana/promtail:2.9.7
     container_name: promtail
-    env_file:
-      - .env
-    volumes:
-      - ./promtail/promtail.yaml:/etc/promtail/promtail.yaml:ro
-      # FAIL2BAN_LOG_PATH debe ser la ruta absoluta en el HOST al log de fail2ban
-      - ${FAIL2BAN_LOG_PATH}:${FAIL2BAN_LOG_PATH}:ro
-      - /etc/localtime:/etc/localtime:ro
-      - /etc/timezone:/etc/timezone:ro
+    <<: *common-opts
+    depends_on: [loki]
     command:
       - "-config.expand-env=true"
       - "-config.file=/etc/promtail/promtail.yaml"
-    depends_on:
-      - loki
-    restart: unless-stopped
+    volumes:
+      # tu promtail.yaml (el “bueno” de la respuesta anterior)
+      - ./promtail/promtail.yaml:/etc/promtail/promtail.yaml:ro
+      # monta el log real de fail2ban en la misma ruta que espera promtail
+      - ${FAIL2BAN_LOG_PATH}:${FAIL2BAN_LOG_PATH}:ro
 
   api:
     build:
       context: ./api
       dockerfile: Dockerfile
     container_name: fail2ban-api
-    env_file:
-      - .env
+    <<: *common-opts
+    depends_on: [loki]
     ports:
       - "${API_PORT:-8000}:8000"
-    depends_on:
-      - loki
     volumes:
-      # Montar el socket de fail2ban del host al contenedor.
-      # Asegúrate de que esta ruta es correcta para tu sistema host.
-      # El socket debe ser escribible por el cliente para ban/unban.
+      # acceso de lectura / escritura al socket para ban/unban
       - /var/run/fail2ban/fail2ban.sock:/var/run/fail2ban/fail2ban.sock
-      - /etc/localtime:/etc/localtime:ro
-      - /etc/timezone:/etc/timezone:ro
-    restart: unless-stopped
+      # si tu API necesita mirar el mismo log, móntalo también:
+      # - ${FAIL2BAN_LOG_PATH}:${FAIL2BAN_LOG_PATH}:ro
 
 volumes:
   loki_data:
