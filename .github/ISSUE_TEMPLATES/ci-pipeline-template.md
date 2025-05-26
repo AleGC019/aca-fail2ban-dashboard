@@ -26,7 +26,7 @@
 <details>
 <summary>Coverage report</summary>
 
-Total coverage: **{{COVERAGE}} %**
+{{COVERAGE_COMMENT}}
 
 </details>
 

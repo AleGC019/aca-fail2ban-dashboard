@@ -217,44 +217,28 @@ jobs:
         id: coverage
         run: |
           cd api
-          # Extraer porcentaje de cobertura del archivo JSON
           COVERAGE=$(python -c "import json; print(json.load(open('coverage.json'))['totals']['percent_covered_display'])")
           echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
 
-          # Crear reporte para comentario
-          echo "## 📊 Reporte de Cobertura de Código" > coverage_comment.md
+          # Create report for comment (in English)
+          echo "### 📊 Code Coverage Report" > coverage_comment.md
           echo "" >> coverage_comment.md
-          echo "**Cobertura total: $COVERAGE%**" >> coverage_comment.md
+          echo "**Total coverage: $COVERAGE%**" >> coverage_comment.md
           echo "" >> coverage_comment.md
 
           if (( $(echo "$COVERAGE >= 60" | bc -l) )); then
-            echo "✅ **OBJETIVO CUMPLIDO** - Cobertura mínima del 60% alcanzada" >> coverage_comment.md
+            echo "✅ **GOAL MET** - Minimum 60% coverage achieved" >> coverage_comment.md
           else
-            echo "❌ **OBJETIVO NO CUMPLIDO** - Se requiere mínimo 60% de cobertura" >> coverage_comment.md
+            echo "❌ **GOAL NOT MET** - At least 60% coverage required" >> coverage_comment.md
           fi
 
           echo "" >> coverage_comment.md
-          echo "📈 **Detalles:**" >> coverage_comment.md
+          echo "📈 **Details:**" >> coverage_comment.md
           echo "\`\`\`" >> coverage_comment.md
           python -m coverage report --format=text >> coverage_comment.md
           echo "\`\`\`" >> coverage_comment.md
           echo "" >> coverage_comment.md
-          echo "🔗 [Ver reporte completo en artefactos](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> coverage_comment.md
-
-      - name: Comment coverage on PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const coverage = fs.readFileSync('api/coverage_comment.md', 'utf8');
-
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: coverage
-            });
+          echo "🔗 [See full report in artifacts](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> coverage_comment.md
 
       - name: Upload coverage reports
         uses: actions/upload-artifact@v4
@@ -351,13 +335,22 @@ jobs:
           # Replacement using Perl (keeps newlines, handles missing vars)
           perl -pe 's/\{\{(\w+)\}\}/$ENV{$1}/ge' "$TEMPLATE" > "$OUT"
 
-      # 3. Create (or comment-on) the Issue
+      # 3. Prepare Issue body with coverage
+      - name: Prepare Issue body with coverage
+        run: |
+          cp .github/ISSUE_TEMPLATES/ci-pipeline-template.md issue-body.md
+          # Insert the coverage comment into the template
+          COVERAGE_COMMENT=$(cat api/coverage_comment.md)
+          # Use Perl to replace the placeholder with the actual coverage comment (preserving newlines)
+          perl -0777 -pe "s/\{\{COVERAGE_COMMENT\}\}/\Q$COVERAGE_COMMENT\E/s" issue-body.md > issue-body-final.md
+
+      # 4. Create (or comment-on) the Issue
       - name: Create Issue from file
         uses: peter-evans/create-issue-from-file@v5
         with:
           title: |
             CI Pipeline ${{ steps.compute_status.outputs.status }} - ${{ github.workflow }} on ${{ github.ref_name }}
-          content-filepath: issue-body.md
+          content-filepath: issue-body-final.md
           assignees: ${{ github.actor }}
           labels: |
             ci-pipeline,
@@ -401,129 +394,149 @@ jobs:
           JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
           JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
         run: |
+          # Determinar el estado del pipeline
           if [[ "${{ needs.lint.result }}" == "success" && \
                 "${{ needs.build.result }}" == "success" && \
                 "${{ needs.integration-tests.result }}" == "success" && \
                 "${{ needs.unit-tests.result }}" == "success" && \
                 "${{ needs.cleanup.result }}" == "success" ]]; then
             STATUS="✅ SUCCESSFUL"
-            echo "✅ Pipeline completed successfully"
           else
             STATUS="❌ FAILED"
-            echo "❌ Pipeline failed - Check individual stages"
-            echo "Status: lint=${{ needs.lint.result }}, build=${{ needs.build.result }}, integration-tests=${{ needs.integration-tests.result }}, unit-tests=${{ needs.unit-tests.result }}, cleanup=${{ needs.cleanup.result }}"
           fi
 
-          curl -X POST -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
-            -H "Content-Type: application/json" \
-            --data '{
-              "fields": {
-                "project": { "key": "'"$JIRA_PROJECT_KEY"'" },
-                "summary": "CI Pipeline '"$STATUS"' - '${{ github.workflow }}' on '${{ github.ref_name }}'",
-                "description": {
-                  "type": "doc",
-                  "version": 1,
-                  "content": [
+          # Variables para el resumen y enlaces
+          SUMMARY="CI Pipeline $STATUS - ${{ github.workflow }} on ${{ github.ref_name }}"
+          PIPELINE_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          COMMIT_URL="${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"
+
+          # Construir el JSON en formato ADF usando jq
+          PAYLOAD=$(jq -n \
+            --arg projectKey "$JIRA_PROJECT_KEY" \
+            --arg summary "$SUMMARY" \
+            --arg status "$STATUS" \
+            --arg branch "${{ github.ref_name }}" \
+            --arg event "${{ github.event_name }}" \
+            --arg commit "${{ github.sha }}" \
+            --arg author "${{ github.actor }}" \
+            --arg commitMsg "${{ github.event.head_commit.message }}" \
+            --arg lint "${{ needs.lint.result }}" \
+            --arg build "${{ needs.build.result }}" \
+            --arg integration "${{ needs.integration-tests.result }}" \
+            --arg unit "${{ needs.unit-tests.result }}" \
+            --arg cleanup "${{ needs.cleanup.result }}" \
+            --arg pipelineUrl "$PIPELINE_URL" \
+            --arg commitUrl "$COMMIT_URL" \
+            '{
+              fields: {
+                project: { key: $projectKey },
+                summary: $summary,
+                description: {
+                  type: "doc",
+                  version: 1,
+                  content: [
                     {
-                      "type": "heading",
-                      "attrs": { "level": 2 },
-                      "content": [{ "type": "text", "text": "Pipeline Summary" }]
+                      type: "heading",
+                      attrs: { level: 2 },
+                      content: [{ type: "text", text: "Pipeline Summary" }]
                     },
                     {
-                      "type": "paragraph",
-                      "content": [{ "type": "text", "text": "Status: '"$STATUS"'" }]
+                      type: "paragraph",
+                      content: [{ type: "text", text: ("Status: " + $status) }]
                     },
                     {
-                      "type": "paragraph",
-                      "content": [{ "type": "text", "text": "Branch: '${{ github.ref_name }}'" }]
+                      type: "paragraph",
+                      content: [{ type: "text", text: ("Branch: " + $branch) }]
                     },
                     {
-                      "type": "paragraph",
-                      "content": [{ "type": "text", "text": "Event: '${{ github.event_name }}'" }]
+                      type: "paragraph",
+                      content: [{ type: "text", text: ("Event: " + $event) }]
                     },
                     {
-                      "type": "paragraph",
-                      "content": [{ "type": "text", "text": "Commit: '${{ github.sha }}'" }]
+                      type: "paragraph",
+                      content: [{ type: "text", text: ("Commit: " + $commit) }]
                     },
                     {
-                      "type": "paragraph",
-                      "content": [{ "type": "text", "text": "Author: '${{ github.actor }}'" }]
+                      type: "paragraph",
+                      content: [{ type: "text", text: ("Author: " + $author) }]
                     },
                     {
-                      "type": "paragraph",
-                      "content": [{ "type": "text", "text": "Commit message: '${{ github.event.head_commit.message }}'" }]
+                      type: "paragraph",
+                      content: [{ type: "text", text: ("Commit message: " + $commitMsg) }]
                     },
                     {
-                      "type": "heading",
-                      "attrs": { "level": 3 },
-                      "content": [{ "type": "text", "text": "Pipeline Stages" }]
+                      type: "heading",
+                      attrs: { level: 3 },
+                      content: [{ type: "text", text: "Pipeline Stages" }]
                     },
                     {
-                      "type": "paragraph",
-                      "content": [{ "type": "text", "text": "✅ Stage 1 - Code Quality Check (Lint)" }]
+                      type: "paragraph",
+                      content: [{ type: "text", text: ((($lint == "success")? "✅" : "❌") + " Stage 1 - Code Quality Check (Lint)") }]
                     },
                     {
-                      "type": "paragraph",
-                      "content": [{ "type": "text", "text": "${{ needs.build.result == 'success' && '✅' || '❌' }} Stage 2 - Container Build" }]
+                      type: "paragraph",
+                      content: [{ type: "text", text: ((($build == "success")? "✅" : "❌") + " Stage 2 - Container Build") }]
                     },
                     {
-                      "type": "paragraph",
-                      "content": [{ "type": "text", "text": "${{ needs.integration-tests.result == 'success' && '✅' || '❌' }} Stage 3 - Integration & Flow Test" }]
+                      type: "paragraph",
+                      content: [{ type: "text", text: ((($integration == "success")? "✅" : "❌") + " Stage 3 - Integration & Flow Test") }]
                     },
                     {
-                      "type": "paragraph",
-                      "content": [{ "type": "text", "text": "${{ needs.unit-tests.result == 'success' && '✅' || '❌' }} Stage 4 - Unit Tests" }]
+                      type: "paragraph",
+                      content: [{ type: "text", text: ((($unit == "success")? "✅" : "❌") + " Stage 4 - Unit Tests") }]
                     },
                     {
-                      "type": "paragraph",
-                      "content": [{ "type": "text", "text": "${{ needs.cleanup.result == 'success' && '✅' || '❌' }} Stage 5 - Cleanup" }]
+                      type: "paragraph",
+                      content: [{ type: "text", text: ((($cleanup == "success")? "✅" : "❌") + " Stage 5 - Cleanup") }]
                     },
                     {
-                      "type": "heading",
-                      "attrs": { "level": 3 },
-                      "content": [{ "type": "text", "text": "Links" }]
+                      type: "heading",
+                      attrs: { level: 3 },
+                      content: [{ type: "text", text: "Links" }]
                     },
                     {
-                      "type": "paragraph",
-                      "content": [
-                        { "type": "text", "text": "View pipeline: " },
+                      type: "paragraph",
+                      content: [
+                        { type: "text", text: "View pipeline: " },
                         {
-                          "type": "text",
-                          "text": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
-                          "marks": [{
-                            "type": "link",
-                            "attrs": {
-                              "href": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-                            }
+                          type: "text",
+                          text: $pipelineUrl,
+                          marks: [{
+                            type: "link",
+                            attrs: { href: $pipelineUrl }
                           }]
                         }
                       ]
                     },
                     {
-                      "type": "paragraph",
-                      "content": [
-                        { "type": "text", "text": "View commit: " },
+                      type: "paragraph",
+                      content: [
+                        { type: "text", text: "View commit: " },
                         {
-                          "type": "text",
-                          "text": "${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}",
-                          "marks": [{
-                            "type": "link",
-                            "attrs": {
-                              "href": "${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"
-                            }
+                          type: "text",
+                          text: $commitUrl,
+                          marks: [{
+                            type: "link",
+                            attrs: { href: $commitUrl }
                           }]
                         }
                       ]
                     }
                   ]
                 },
-                "issuetype": { "name": "Task" },
-                "labels": [ 
-                  "ci-pipeline", 
-                  "fail2ban-dashboard", 
-                  "${{ github.ref_name }}",
-                  "${{ github.event_name }}"
+                issuetype: { name: "Task" },
+                labels: [
+                  "ci-pipeline",
+                  "fail2ban-dashboard",
+                  $branch,
+                  $event
                 ]
               }
-            }' \
+            }'
+          )
+
+          # Enviar a Jira
+          curl -X POST -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data "$PAYLOAD" \
             "$JIRA_BASE_URL/rest/api/3/issue"
