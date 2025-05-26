@@ -10,7 +10,7 @@ pip install -r requirements.txt
 
 # Ejecutar pruebas con cobertura
 echo "📊 Ejecutando pytest con coverage..."
-PYTHONPATH=. python -m pytest tests/ -v --cov=. --cov-report=html --cov-report=term-missing --cov-fail-under=60
+PYTHONPATH=. python -m pytest tests/ -v --tb=short --cov=. --cov-report=html --cov-report=term --cov-report=json --cov-fail-under=60
 
 # Mostrar resultados
 echo ""

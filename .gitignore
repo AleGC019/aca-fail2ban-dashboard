@@ -68,6 +68,12 @@ env/
 env.bak/
 venv.bak/
 
+run_coverage.sh
+coverage.json
+.coverage
+.coveragerc
+
+
 # Archivos de IDE
 .vscode/
 .idea/
