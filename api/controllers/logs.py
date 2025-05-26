@@ -11,7 +11,7 @@ import asyncio
 
 import time
 import re
-from typing import Dict, List, Optional  # Añadido Optional para claridad si se usa
+from typing import Optional  # Añadido Optional para claridad si se usa
 from datetime import datetime
 import math
 import websockets
@@ -347,7 +347,8 @@ async def get_banned_ips(
     jail: str = Query("sshd", description="Nombre del jail de Fail2ban")
 ) -> dict:
     """
-    Obtiene IPs actualmente baneadas y sus logs de baneo desde Loki.
+    Obtiene IPs actualmente baneadas y sus logs de baneo desde Loki, buscando el formato exacto:
+    '2025-05-25 16:59:22,667 fail2ban.actions [pid]: NOTICE [jail] Ban ip'.
     """
     # Verificar si el jail existe
     if not jail_exists(jail):
@@ -371,11 +372,12 @@ async def get_banned_ips(
             "values": []
         }
 
-    # Regex para validar el formato del log y extraer el timestamp
+    # Regex para validar el formato exacto del log
+    # Ejemplo: "2025-05-25 16:59:22,667 fail2ban.actions [128145]: NOTICE [sshd] Ban 192.168.1.100"
     log_pattern = re.compile(
-        r'(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d{3})\s+'
-        r'fail2ban\.actions\s*\[\d+\]:\s+NOTICE\s+\[([^\]]+)\]\s+'
-        r'(?:[Bb][Aa][Nn](?:ned)?|already banned)\s+(\S+)'
+        r'^(?P<timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d{3})\s+'
+        r'fail2ban\.actions\s*\[(?P<pid>\d+)\]:\s+NOTICE\s+\[(?P<jail>[^\]]+)\]\s+'
+        r'Ban\s+(?P<ip>\d{1,3}(?:\.\d{1,3}){3})$'
     )
 
     # Consultar Loki para cada IP
@@ -386,9 +388,9 @@ async def get_banned_ips(
 
     async with AsyncClient(timeout=10.0) as client:
         for ip in currently_banned_ips:
-            # Consulta específica para la IP
+            # Consulta específica para la IP con el formato exacto
             params_ban = {
-                "query": f'{{job="fail2ban", jail="{jail}"}} |= "{ip}" |~ "[Bb][Aa][Nn](?:ned)?|already banned"',
+                "query": f'{{job="fail2ban", jail="{jail}"}} |= "{ip}" |= "NOTICE" |= "Ban"',
                 "start": str(start_ns),
                 "end": str(end_ns),
                 "limit": 1,  # Solo el log más reciente
@@ -402,23 +404,29 @@ async def get_banned_ips(
                 if ban_results:
                     for stream in ban_results:
                         for ts, line in stream.get("values", []):
-                            # Validar el formato del log
-                            match = log_pattern.match(line.strip())
+                            line = line.strip()
+                            # Validar el formato exacto del log
+                            match = log_pattern.match(line)
                             if match:
-                                timestamp_str, log_jail, log_ip = match.groups()
+                                timestamp_str = match.group('timestamp')
+                                log_jail = match.group('jail')
+                                log_ip = match.group('ip')
                                 if log_jail == jail and log_ip == ip:
-                                    ban_time = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S,%f').strftime('%Y-%m-%d %H:%M:%S')
-                                    ban_entries.append({
-                                        "ip": ip,
-                                        "jail": jail,
-                                        "ban_time": ban_time,
-                                        "failed_attempts": 1,  # Placeholder
-                                        "raw_log": line.strip()
-                                    })
-                                    print(f"Log de baneo encontrado para IP {ip}: {line.strip()}")
-                                    break
+                                    try:
+                                        ban_time = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S,%f').strftime('%Y-%m-%d %H:%M:%S')
+                                        ban_entries.append({
+                                            "ip": ip,
+                                            "jail": jail,
+                                            "ban_time": ban_time,
+                                            "failed_attempts": 1,  # Placeholder
+                                            "raw_log": line
+                                        })
+                                        print(f"Log de baneo encontrado para IP {ip}: {line}")
+                                        break
+                                    except ValueError as e:
+                                        print(f"Error al parsear timestamp en log para IP {ip}: {line}, error: {str(e)}")
                             else:
-                                print(f"Log no coincide con el formato esperado para IP {ip}: {line.strip()}")
+                                print(f"Log no coincide con el formato esperado para IP {ip}: {line}")
                         if ban_entries and ban_entries[-1]["ip"] == ip:
                             break  # Log encontrado, pasar a la siguiente IP
                 else:
