@@ -298,7 +298,7 @@ jobs:
       - name: Inject synthetic log line
         run: |
           echo "2025-05-26 19:00:00,123 fail2ban.filter [1234]: INFO [sshd] Starting" > ${{ env.FAIL2BAN_LOG_PATH }}
-          echo "2025-05-26 20:00:00,123 fail2ban.filter [1234]: NOTICE [sshd] Ban 1.2.3.4" >> ${{ env.FAIL2BAN_LOG_PATH }}
+          echo "2025-05-26 20:00:00,123 fail2ban.actions [1234]: NOTICE [sshd] Ban 1.2.3.4" >> ${{ env.FAIL2BAN_LOG_PATH }}
           cat ${{ env.FAIL2BAN_LOG_PATH }}
 
       - name: Wait for API health check
@@ -402,7 +402,7 @@ jobs:
           export COVERAGE='${{ needs.unit-tests.outputs.coverage || '' }}'
 
           # Replacement using Perl (keeps newlines, handles missing vars)
-          perl -pe 's/\{\{(\w+)\}\}/$ENV{$1}//ge' "$TEMPLATE" > "$OUT"
+          perl -pe 's/\{\{(\w+)\}\}/$ENV{$1}/ge' "$TEMPLATE" > "$OUT"
 
       # 3. Create (or comment-on) the Issue
       - name: Create Issue from file
