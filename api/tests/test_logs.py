@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+from httpx import AsyncClient
 from unittest.mock import patch, MagicMock
 
 @patch.dict('os.environ', {'LOKI_QUERY_URL': 'http://loki:3100/api/v1/query_range'})
@@ -7,7 +8,7 @@ def test_logs_controller_import():
     from controllers.logs import router
     assert router is not None
 
-@patch.dict('os.environ', {'LOKI_QUERY_URL': 'http:/loki:3100/api/v1/query_range'})
+@patch.dict('os.environ', {'LOKI_QUERY_URL': 'http://loki:3100/api/v1/query_range'})
 @patch('httpx.AsyncClient.get')
 async def test_fail2ban_logs_endpoint(mock_get):
     """Test fail2ban logs endpoint returns proper response"""
@@ -29,13 +30,12 @@ async def test_fail2ban_logs_endpoint(mock_get):
     mock_get.return_value = mock_response
     
     from main import app
-    client = TestClient(app)
-    
-    response = client.get("/fail2ban/logs?limit=10")
-    assert response.status_code == 200
-    data = response.json()
-    assert "logs" in data
-    assert "total" in data
+    async with AsyncClient(app=app, base_url="http://test") as client:
+        response = await client.get("/fail2ban/logs?limit=10")
+        assert response.status_code == 200
+        data = response.json()
+        assert "logs" in data
+        assert "total" in data
 
 @patch.dict('os.environ', {'LOKI_QUERY_URL': 'http://loki:3100/api/v1/query_range'})
 @patch('httpx.AsyncClient.get')
@@ -58,12 +58,11 @@ async def test_fail2ban_logs_with_filters(mock_get):
     mock_get.return_value = mock_response
     
     from main import app
-    client = TestClient(app)
-    
-    response = client.get("/fail2ban/logs?limit=5&jail=sshd&action=ban")
-    assert response.status_code == 200
-    data = response.json()
-    assert "logs" in data
+    async with AsyncClient(app=app, base_url="http://test") as client:
+        response = await client.get("/fail2ban/logs?limit=5&jail=sshd&action=ban")
+        assert response.status_code == 200
+        data = response.json()
+        assert "logs" in data
 
 @patch.dict('os.environ', {'LOKI_QUERY_URL': 'http://loki:3100/api/v1/query_range'})
 @patch('httpx.AsyncClient.get')
@@ -73,12 +72,11 @@ async def test_fail2ban_logs_error_handling(mock_get):
     mock_get.side_effect = RequestError("Connection failed")
     
     from main import app
-    client = TestClient(app)
-    
-    response = client.get("/fail2ban/logs")
-    assert response.status_code == 500
-    data = response.json()
-    assert "error" in data
+    async with AsyncClient(app=app, base_url="http://test") as client:
+        response = await client.get("/fail2ban/logs")
+        assert response.status_code == 500
+        data = response.json()
+        assert "error" in data
 
 @patch.dict('os.environ', {'LOKI_QUERY_URL': 'http://loki:3100/api/v1/query_range'})
 @patch('httpx.AsyncClient.get')
@@ -102,13 +100,12 @@ async def test_fail2ban_stats_endpoint(mock_get):
     mock_get.return_value = mock_response
     
     from main import app
-    client = TestClient(app)
-    
-    response = client.get("/fail2ban/stats")
-    assert response.status_code == 200
-    data = response.json()
-    assert "stats" in data
-    assert "total_events" in data["stats"]
+    async with AsyncClient(app=app, base_url="http://test") as client:
+        response = await client.get("/fail2ban/stats")
+        assert response.status_code == 200
+        data = response.json()
+        assert "stats" in data
+        assert "total_events" in data["stats"]
 
 @patch.dict('os.environ', {'LOKI_QUERY_URL': 'http://loki:3100/api/v1/query_range'})
 @patch('services.fail2ban.get_currently_banned_ips')
@@ -120,13 +117,12 @@ async def test_banned_ips_endpoint(mock_banned_ips):
     ]
     
     from main import app
-    client = TestClient(app)
-    
-    response = client.get("/fail2ban/banned-ips")
-    assert response.status_code == 200
-    data = response.json()
-    assert "banned_ips" in data
-    assert len(data["banned_ips"]) == 2
+    async with AsyncClient(app=app, base_url="http://test") as client:
+        response = await client.get("/fail2ban/banned-ips")
+        assert response.status_code == 200
+        data = response.json()
+        assert "banned_ips" in data
+        assert len(data["banned_ips"]) == 2
 
 @patch.dict('os.environ', {'LOKI_QUERY_URL': 'http://loki:3100/api/v1/query_range'})
 def test_health_endpoint():
