@@ -149,6 +149,8 @@ jobs:
     name: Stage 4 - Unit Tests
     needs: build
     runs-on: ubuntu-latest
+    outputs:
+      coverage: ${{ steps.coverage.outputs.coverage }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -285,27 +287,18 @@ jobs:
 
           # Verificar el directorio
           mkdir -p $(dirname ${{ env.FAIL2BAN_LOG_PATH }})
-          ls -la $(dirname ${{ env.FAIL2BAN_LOG_PATH }})
 
           # Crear el archivo de log y verificar
           echo 'May 24 19:00:00 server fail2ban[1234]: INFO [sshd] Starting' > ${{ env.FAIL2BAN_LOG_PATH }}
           cat ${{ env.FAIL2BAN_LOG_PATH }}
-          ls -la ${{ env.FAIL2BAN_LOG_PATH }}
-
-          # Mostrar el valor actual de la variable
-          echo "Log path: ${{ env.FAIL2BAN_LOG_PATH }}"
-
-          # Verificar contenido del .env
-          echo "--- Contenido de .env ---"
-          cat .env
 
       - name: Start service stack
         run: docker compose up -d --build
 
       - name: Inject synthetic log line
         run: |
-          echo '2025-05-26 19:00:00,123 fail2ban.filter [1234]: INFO [sshd] Starting' > ${{ env.FAIL2BAN_LOG_PATH }}
-          echo '2025-05-26 20:00:00,123 fail2ban.filter [1234]: NOTICE [sshd] Ban 1.2.3.4' >> ${{ env.FAIL2BAN_LOG_PATH }}
+          echo "2025-05-26 19:00:00,123 fail2ban.filter [1234]: INFO [sshd] Starting" > ${{ env.FAIL2BAN_LOG_PATH }}
+          echo "2025-05-26 20:00:00,123 fail2ban.filter [1234]: NOTICE [sshd] Ban 1.2.3.4" >> ${{ env.FAIL2BAN_LOG_PATH }}
           cat ${{ env.FAIL2BAN_LOG_PATH }}
 
       - name: Wait for API health check
@@ -322,7 +315,7 @@ jobs:
         run: |
           sleep 10
           echo "--- Verificación de logs en API ---"
-          
+
           # Consultar los logs y verificar respuesta
           response=$(curl --fail "http://localhost:8000/fail2ban/logs?limit=10")
           echo "Respuesta API:"
@@ -351,8 +344,82 @@ jobs:
       - name: Teardown Docker
         run: docker compose down -v --remove-orphans --rmi local
 
+  notify-github:
+    name: Stage 7 - Create GitHub Issue
+    needs: [cleanup, lint, build, test, unit-tests, integration-check]
+    runs-on: ubuntu-latest
+    if: always()
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 1. Compute overall pipeline status emoji/text
+      - name: Compute pipeline status
+        id: compute_status
+        run: |
+          if [ "${{ needs.lint.result }}" == "success" ]       &&
+             [ "${{ needs.build.result }}" == "success" ]      &&
+             [ "${{ needs.test.result }}" == "success" ]       &&
+             [ "${{ needs.unit-tests.result }}" == "success" ] &&
+             [ "${{ needs.integration-check.result }}" == "success" ] &&
+             [ "${{ needs.cleanup.result }}" == "success" ]; then
+            echo "status=✅ SUCCESS" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=❌ FAILED"  >> "$GITHUB_OUTPUT"
+          fi
+
+      # 2. Prepare the Issue body by replacing placeholders
+      - name: Render Issue template
+        id: render_issue
+        shell: bash
+        run: |
+          TEMPLATE='.github/ISSUE_TEMPLATES/ci-pipeline-notification.md'
+          OUT='issue-body.md'
+
+          # Export variables for replacement
+          export STATUS='${{ steps.compute_status.outputs.status }}'
+          export WORKFLOW='${{ github.workflow }}'
+          export REF_NAME='${{ github.ref_name }}'
+          export EVENT_NAME='${{ github.event_name }}'
+          export SHA='${{ github.sha }}'
+          export SHORT_SHA='${{ github.sha }}' ; SHORT_SHA=${SHORT_SHA:0:7} ; export SHORT_SHA
+          export ACTOR='${{ github.actor }}'
+          export RUN_URL='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+          export REPO='${{ github.repository }}'
+
+          # Per-stage results
+          export LINT_STATUS='${{ needs.lint.result }}'
+          export BUILD_STATUS='${{ needs.build.result }}'
+          export TEST_STATUS='${{ needs.test.result }}'
+          export UNIT_STATUS='${{ needs.unit-tests.result }}'
+          export INTEGRATION_STATUS='${{ needs.integration-check.result }}'
+          export CLEANUP_STATUS='${{ needs.cleanup.result }}'
+
+          # Example: pull coverage % from an earlier output (fallback to N/A)
+          export COVERAGE='${{ needs.unit-tests.outputs.coverage || '' }}'
+
+          # Replacement using Perl (keeps newlines, handles missing vars)
+          perl -pe 's/\{\{(\w+)\}\}/$ENV{$1}//ge' "$TEMPLATE" > "$OUT"
+
+      # 3. Create (or comment-on) the Issue
+      - name: Create Issue from file
+        uses: peter-evans/create-issue-from-file@v5
+        with:
+          title: |
+            CI Pipeline ${{ steps.compute_status.outputs.status }} - ${{ github.workflow }} on ${{ github.ref_name }}
+          content-filepath: issue-body.md
+          assignees: ${{ github.actor }}
+          labels: |
+            ci-pipeline,
+            fail2ban-dashboard,
+            ${{ github.ref_name }},
+            ${{ github.event_name }}
+
   notify-jira:
-    name: Stage 7 - Notify Jira
+    name: Stage 8 - Notify Jira
     environment: JIRA
     needs: [cleanup, lint, build, test, unit-tests, integration-check]
     runs-on: ubuntu-latest
