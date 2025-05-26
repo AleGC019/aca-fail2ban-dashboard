@@ -297,9 +297,9 @@ jobs:
 
       - name: Inject synthetic log line
         run: |
-          echo "2025-05-26 19:00:00,456 fail2ban.filter [5678]: INFO [sshd] Starting" > ${{ env.FAIL2BAN_LOG_PATH }}
-          echo "2025-05-26 20:00:00,123 fail2ban.actions [1234]: NOTICE [sshd] Ban 80.94.95.112" >> ${{ env.FAIL2BAN_LOG_PATH }}
-          cat ${{ env.FAIL2BAN_LOG_PATH }}
+          TS=$(date -u '+%Y-%m-%d %H:%M:%S')
+          echo "${TS},123 fail2ban.filter [5678]: INFO [sshd] Starting" > "${{ env.FAIL2BAN_LOG_PATH}}"
+          echo "${TS},123 fail2ban.actions [1234]: NOTICE [sshd] Ban 80.94.95.112" >> "${{ env.FAIL2BAN_LOG_PATH}}"
 
       - name: Wait for API health check
         run: |
