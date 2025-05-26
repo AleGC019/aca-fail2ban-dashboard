@@ -90,6 +90,17 @@ jobs:
       - name: Start service stack
         run: docker compose up -d --build
 
+      - name: Diagnóstico de volúmenes
+        run: |
+          echo "--- Diagnóstico de Docker ---"
+          docker compose ps
+          docker compose config | grep FAIL2BAN_LOG_PATH
+          docker exec promtail ls -la ${{ env.FAIL2BAN_LOG_PATH }} || echo "No se pudo acceder al archivo dentro de promtail"
+          docker exec promtail cat /etc/promtail/promtail.yaml | grep FAIL2BAN_LOG_PATH
+
+          # Verificar que el archivo sigue existiendo
+          ls -la ${{ env.FAIL2BAN_LOG_PATH }} || echo "El archivo ya no existe en el host"
+
       - name: Wait for API health check
         run: |
           MAX_ATTEMPTS=15
@@ -177,19 +188,19 @@ jobs:
           # Extraer porcentaje de cobertura del archivo JSON
           COVERAGE=$(python -c "import json; print(json.load(open('coverage.json'))['totals']['percent_covered_display'])")
           echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
-          
+
           # Crear reporte para comentario
           echo "## 📊 Reporte de Cobertura de Código" > coverage_comment.md
           echo "" >> coverage_comment.md
           echo "**Cobertura total: $COVERAGE%**" >> coverage_comment.md
           echo "" >> coverage_comment.md
-          
+
           if (( $(echo "$COVERAGE >= 60" | bc -l) )); then
             echo "✅ **OBJETIVO CUMPLIDO** - Cobertura mínima del 60% alcanzada" >> coverage_comment.md
           else
             echo "❌ **OBJETIVO NO CUMPLIDO** - Se requiere mínimo 60% de cobertura" >> coverage_comment.md
           fi
-          
+
           echo "" >> coverage_comment.md
           echo "📈 **Detalles:**" >> coverage_comment.md
           echo "\`\`\`" >> coverage_comment.md
@@ -205,7 +216,7 @@ jobs:
           script: |
             const fs = require('fs');
             const coverage = fs.readFileSync('api/coverage_comment.md', 'utf8');
-            
+
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
@@ -271,7 +282,22 @@ jobs:
         run: |
           cp .env.example .env
           echo "FAIL2BAN_LOG_PATH=${{ env.FAIL2BAN_LOG_PATH }}" >> .env
+
+          # Verificar el directorio
+          mkdir -p $(dirname ${{ env.FAIL2BAN_LOG_PATH }})
+          ls -la $(dirname ${{ env.FAIL2BAN_LOG_PATH }})
+
+          # Crear el archivo de log y verificar
           echo 'May 24 19:00:00 server fail2ban[1234]: INFO [sshd] Starting' > ${{ env.FAIL2BAN_LOG_PATH }}
+          cat ${{ env.FAIL2BAN_LOG_PATH }}
+          ls -la ${{ env.FAIL2BAN_LOG_PATH }}
+
+          # Mostrar el valor actual de la variable
+          echo "Log path: ${{ env.FAIL2BAN_LOG_PATH }}"
+
+          # Verificar contenido del .env
+          echo "--- Contenido de .env ---"
+          cat .env
 
       - name: Start service stack
         run: docker compose up -d --build
@@ -279,6 +305,7 @@ jobs:
       - name: Inject synthetic log line
         run: |
           echo 'May 24 20:00:00 server fail2ban[1234]: NOTICE [sshd] Ban 1.2.3.4' >> ${{ env.FAIL2BAN_LOG_PATH }}
+          cat ${{ env.FAIL2BAN_LOG_PATH }}
 
       - name: Wait for API health check
         run: |
@@ -293,41 +320,35 @@ jobs:
       - name: Check log via API
         run: |
           sleep 10
+          echo "--- Verificación de logs en API ---"
+
+          # Verificar si el archivo existe en el contenedor API
+          docker exec api ls -la ${{ env.FAIL2BAN_LOG_PATH }} || echo "Log no visible en contenedor API"
+
+          # Verificar estado de Loki/Promtail
+          docker exec promtail ps aux | grep promtail
+          docker exec loki ps aux | grep loki
+
+          # Consultar API directamente
+          curl -v "http://localhost:8000/health"
+
+          # Consultar los logs y verificar respuesta
           response=$(curl --fail "http://localhost:8000/fail2ban/logs?limit=10")
+          echo "Respuesta API:"
           echo "$response" | jq .
           echo "$response" | grep -q "1.2.3.4" || (echo "Expected IP not found in logs" && exit 1)
+
+          # Verificar logs en Loki directamente
+          echo "--- Consultando Loki directamente ---"
+          curl -s "http://localhost:3100/loki/api/v1/query_range?query=%7Bjob%3D%22fail2ban%22%7D&limit=10" | jq .
 
       - name: Debug on failure
         if: failure()
         run: docker compose logs
 
-  save-artifacts:
-    name: Stage 6 - Save Reports & Logs
-    needs: [unit-tests, integration-check]
-    runs-on: ubuntu-latest
-    if: always()
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Create environment file
-        run: |
-          cp .env.example .env || echo "No .env.example found, creating new .env file"
-          echo "FAIL2BAN_LOG_PATH=${{ env.FAIL2BAN_LOG_PATH }}" >> .env
-          echo "FAIL2BAN_LOG_PATH=${{ env.FAIL2BAN_LOG_PATH }}" >> $GITHUB_ENV
-
-      - name: Collect logs
-        run: docker compose logs --no-color > logs.txt
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: service-logs
-          path: logs.txt
-
   cleanup:
-    name: Stage 7 - Cleanup
-    needs: [save-artifacts]
+    name: Stage 6 - Cleanup
+    needs: [unit-tests, integration-check]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -344,18 +365,9 @@ jobs:
         run: docker compose down -v --remove-orphans --rmi local
 
   notify-jira:
-    name: Stage 8 - Notify Jira
+    name: Stage 7 - Notify Jira
     environment: JIRA
-    needs:
-      [
-        cleanup,
-        lint,
-        build,
-        test,
-        unit-tests,
-        integration-check,
-        save-artifacts,
-      ]
+    needs: [cleanup, lint, build, test, unit-tests, integration-check]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -394,14 +406,13 @@ jobs:
                 "${{ needs.test.result }}" == "success" && \
                 "${{ needs.unit-tests.result }}" == "success" && \
                 "${{ needs.integration-check.result }}" == "success" && \
-                "${{ needs.save-artifacts.result }}" == "success" && \
                 "${{ needs.cleanup.result }}" == "success" ]]; then
             STATUS="✅ EXITOSO"
             echo "✅ Pipeline completado exitosamente"
           else
             STATUS="❌ FALLIDO" 
             echo "❌ Pipeline falló - Revisar etapas individuales"
-            echo "Estados: lint=${{ needs.lint.result }}, build=${{ needs.build.result }}, test=${{ needs.test.result }}, unit-tests=${{ needs.unit-tests.result }}, integration-check=${{ needs.integration-check.result }}, save-artifacts=${{ needs.save-artifacts.result }}, cleanup=${{ needs.cleanup.result }}"
+            echo "Estados: lint=${{ needs.lint.result }}, build=${{ needs.build.result }}, test=${{ needs.test.result }}, unit-tests=${{ needs.unit-tests.result }}, integration-check=${{ needs.integration-check.result }}, cleanup=${{ needs.cleanup.result }}"
           fi
 
           # Crear descripción detallada
@@ -539,16 +550,7 @@ jobs:
                       "content": [
                         {
                           "type": "text",
-                          "text": "'"${{ needs.save-artifacts.result == 'success' && '✅' || '❌' }}"' Stage 6 - Save Reports & Logs"
-                        }
-                      ]
-                    },
-                    {
-                      "type": "paragraph",
-                      "content": [
-                        {
-                          "type": "text",
-                          "text": "'"${{ needs.cleanup.result == 'success' && '✅' || '❌' }}"' Stage 7 - Cleanup"
+                          "text": "'"${{ needs.cleanup.result == 'success' && '✅' || '❌' }}"' Stage 6 - Cleanup"
                         }
                       ]
                     },
