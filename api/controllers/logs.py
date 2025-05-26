@@ -390,8 +390,8 @@ async def get_banned_ips(
         for ip in currently_banned_ips:
             # Consulta específica para la IP con el formato exacto
             params_ban = {
-                #"query": f'{{job="fail2ban"}} |= "{ip}" |= "NOTICE" |= "Ban"',
-                "query": f'{{job="fail2ban", jail="{jail}"}} |= "{ip}" |= "NOTICE" |= "Ban"',
+                "query": f'{{job="fail2ban"}} |= "{ip}" |= "NOTICE" |= "Ban"',
+                #"query": f'{{job="fail2ban", jail="{jail}"}} |= "{ip}" |= "NOTICE" |= "Ban"',
                 "start": str(start_ns),
                 "end": str(end_ns),
                 "limit": 1,  # Solo el log más reciente
@@ -419,7 +419,7 @@ async def get_banned_ips(
                                             "ip": ip,
                                             "jail": jail,
                                             "ban_time": ban_time,
-                                            "failed_attempts": 1,  # Placeholder
+                                            "failed_attempts": 5,  # Placeholder
                                             "raw_log": line
                                         })
                                         print(f"Log de baneo encontrado para IP {ip}: {line}")
@@ -435,7 +435,7 @@ async def get_banned_ips(
                     ban_entries.append({
                         "ip": ip,
                         "jail": jail,
-                        "ban_time": datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+                        "ban_time": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                         "failed_attempts": 1,
                         "raw_log": "No disponible (log no encontrado)"
                     })
