@@ -84,13 +84,71 @@ async def execute_ip_action(jail_name: str, action: str, ip_address: str) -> Act
 
 @router.post("/jails/{jail_name}/ban-ip", response_model=ActionResponse)
 async def ban_ip_in_jail(jail_name: str, request_body: IPActionRequest):
-    """Banea una IP en el jail especificado."""
-    return await execute_ip_action(jail_name, "ban", request_body.ip_address)
+    if not is_valid_ip(request_body.ip_address):
+        raise HTTPException(status_code=400, detail="Formato de dirección IP inválido.")
+    
+    if not jail_exists(jail_name):
+        raise HTTPException(status_code=400, detail=f"El jail {jail_name} no existe.")
+    
+    if is_ip_banned(jail_name, request_body.ip_address):
+        print(f"IP {request_body.ip_address} ya está baneada en {jail_name}")
+        return ActionResponse(
+            status="info",
+            message=f"La IP {request_body.ip_address} ya está baneada en el jail {jail_name}.",
+            ip_address=request_body.ip_address,
+            jail=jail_name,
+            command_output=None
+        )
+    
+    output = run_fail2ban_command(["set", jail_name, "banip", request_body.ip_address])
+    status = "success"
+    message = f"La IP {request_body.ip_address} ha sido baneada en el jail {jail_name}."
+    
+    if "already banned" in output.lower():
+        status = "info"
+        message = f"La IP {request_body.ip_address} ya estaba baneada en el jail {jail_name}."
+    
+    return ActionResponse(
+        status=status,
+        message=message,
+        ip_address=request_body.ip_address,
+        jail=jail_name,
+        command_output=output
+    )
 
 @router.post("/jails/{jail_name}/unban-ip", response_model=ActionResponse)
 async def unban_ip_in_jail(jail_name: str, request_body: IPActionRequest):
-    """Desbanea una IP en el jail especificado."""
-    return await execute_ip_action(jail_name, "unban", request_body.ip_address)
+    if not is_valid_ip(request_body.ip_address):
+        raise HTTPException(status_code=400, detail="Formato de dirección IP inválido.")
+    
+    if not jail_exists(jail_name):
+        raise HTTPException(status_code=400, detail=f"El jail {jail_name} no existe.")
+    
+    if not is_ip_banned(jail_name, request_body.ip_address):
+        print(f"IP {request_body.ip_address} no encontrada en el estado de baneo de {jail_name}")
+        return ActionResponse(
+            status="info",
+            message=f"La IP {request_body.ip_address} no está baneada en el jail {jail_name}.",
+            ip_address=request_body.ip_address,
+            jail=jail_name,
+            command_output=None
+        )
+    
+    output = run_fail2ban_command(["set", jail_name, "unbanip", request_body.ip_address])
+    status = "success"
+    message = f"La IP {request_body.ip_address} ha sido desbaneada en el jail {jail_name}."
+    
+    if "is not banned" in output.lower():
+        status = "info"
+        message = f"La IP {request_body.ip_address} no estaba baneada en el jail {jail_name}."
+    
+    return ActionResponse(
+        status=status,
+        message=message,
+        ip_address=request_body.ip_address,
+        jail=jail_name,
+        command_output=output
+    )
 
 @router.get("/jails", response_model=List[str])
 async def get_jails():
