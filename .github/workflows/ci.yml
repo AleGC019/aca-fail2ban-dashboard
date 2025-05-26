@@ -295,17 +295,33 @@ jobs:
       - name: Start service stack
         run: docker compose up -d --build
 
+      - name: Docker container status
+        run: |
+          echo "--- Docker PS ---"
+          docker ps -a
+          echo "--- Docker Compose Config (resolved) ---"
+          docker compose config
+          echo "--- Promtail container logs (early) ---"
+          docker compose logs promtail
+          echo "--- API container logs (early) ---"
+          docker compose logs api
+
       - name: Inject synthetic log line
         run: |
           TS=$(date -u '+%Y-%m-%d %H:%M:%S')
           echo "${TS},123 fail2ban.filter [5678]: INFO [sshd] Starting" > "${{ env.FAIL2BAN_LOG_PATH}}"
           echo "${TS},123 fail2ban.actions [1234]: NOTICE [sshd] Ban 80.94.95.112" >> "${{ env.FAIL2BAN_LOG_PATH}}"
+          
+      - name: Show mock log content
+        run: |
+          echo "--- Content of ${{ env.FAIL2BAN_LOG_PATH }} on host ---"
+          cat "${{ env.FAIL2BAN_LOG_PATH }}"
 
       - name: Wait for API health check
         run: |
           attempt=1
           max_attempts=10
-          until curl --fail http://localhost:8000/health || [ $attempt -eq $max_attempts ]; do
+          until curl -v --fail http://localhost:8000/health || [ $attempt -eq $max_attempts ]; do
             echo "Attempt $attempt/$max_attempts: Waiting for API to be ready..."
             sleep 5
             ((attempt++))
@@ -317,10 +333,10 @@ jobs:
           echo "--- Checking logs in API ---"
 
           # Check logs and verify response
-          response=$(curl --fail "http://localhost:8000/fail2ban/logs?limit=10")
+          response=$(curl --fail "http://localhost:8000/fail2ban/logs?limit=10&filter_text=Ban%2080.94.95.112")
           echo "API Response:"
           echo "$response" | jq .
-          echo "$response" | grep -q "1.2.3.4" || (echo "Expected IP not found in logs" && exit 1)
+          echo "$response" | grep -q "80.94.95.112" || (echo "Expected IP not found in logs" && exit 1)
 
       - name: Debug on failure
         if: failure()
