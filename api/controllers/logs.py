@@ -391,7 +391,7 @@ async def get_banned_ips(
             # Consulta específica para la IP con el formato exacto
             params_ban = {
                 #"query": f'{{job="fail2ban", jail="{jail}"}} |= "{ip}" |= "NOTICE" |= "Ban"',
-                "query": f'{{job="fail2ban"}} |= "{ip}" |= "NOTICE" |= "Ban" , |= "[{jail}]',
+                "query": f'{{job="fail2ban"}} |= "{ip}" |= "NOTICE" |= "Ban" |= "[{jail}]',
                 "start": str(start_ns),
                 "end": str(end_ns),
                 "limit": 1,  # Solo el log más reciente
