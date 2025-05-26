@@ -11,7 +11,7 @@ on:
     branches: [main, develop]
 
 env:
-  FAIL2BAN_LOG_PATH: /var/log/fail2ban.log
+  FAIL2BAN_LOG_PATH: /var/tmp/fail2ban.log
 
 jobs:
   lint:
