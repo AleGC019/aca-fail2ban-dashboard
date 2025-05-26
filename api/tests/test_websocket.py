@@ -2,14 +2,10 @@ from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
 
 
-@patch.dict('os.environ', {'LOKI_QUERY_URL': 'http://loki:3100/api/v1/query_range'})
 def test_websocket_import():
     """Test that websocket endpoints can be imported without errors"""
     from controllers.logs import router
     assert router is not None
-
-
-@patch.dict('os.environ', {'LOKI_QUERY_URL': 'http://loki:3100/api/v1/query_range'})
 @patch('httpx.AsyncClient.get')
 def test_websocket_connection(mock_get):
     """Test WebSocket connection establishment"""
