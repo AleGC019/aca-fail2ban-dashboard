@@ -1,0 +1,61 @@
+name: CD Deploy to Droplet
+
+# Se activa cuando hay un push a la rama 'develop'
+# Cambia 'develop' a 'main' o la rama que uses para desplegar
+on:
+  push:
+    branches:
+      - develop
+
+jobs:
+  deploy:
+    name: Deploy Application to DigitalOcean Droplet
+    runs-on: ubuntu-latest # El tipo de máquina virtual que usará GitHub Actions para ejecutar el job
+
+    steps:
+      # Paso 1: No necesitamos hacer checkout del código en el runner de GitHub Actions
+      # porque todos los comandos se ejecutarán remotamente en el Droplet.
+
+      - name: Setup SSH Agent
+        uses: webfactory/ssh-agent@v0.9.0 # Acción para configurar el agente SSH
+        with:
+          ssh-private-key: ${{ secrets.DROPLET_SSH_PRIVATE_KEY }} # Usa la clave privada del secret
+
+      - name: Deploy to Droplet via SSH
+        run: |
+          echo "Connecting to Droplet: ${{ secrets.DROPLET_IP }}"
+          # El comando SSH. -o StrictHostKeyChecking=no es para evitar el prompt de confirmación del host la primera vez.
+          # Considera añadir la huella del host a los known_hosts del runner para mayor seguridad en producción.
+          ssh -o StrictHostKeyChecking=no -p ${{ secrets.DROPLET_SSH_PORT || 22 }} \
+            ${{ secrets.DROPLET_SSH_USER }}@${{ secrets.DROPLET_IP }} << 'EOF'
+
+            echo ">>> Navigating to project directory: ${{ secrets.PROJECT_PATH_ON_DROPLET }}"
+            cd ${{ secrets.PROJECT_PATH_ON_DROPLET }} || { echo "Failed to cd into project directory"; exit 1; }
+
+            echo ">>> Ensuring current branch is correct (develop) and pulling latest changes..."
+            CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+            if [ "$CURRENT_BRANCH" != "develop" ]; then
+              echo "Warning: Not on develop branch, currently on $CURRENT_BRANCH. Attempting to switch."
+              git checkout develop || { echo "Failed to checkout develop branch"; exit 1; }
+            fi
+            git pull origin develop || { echo "Failed to pull changes"; exit 1; }
+
+            echo ">>> Updating and restarting Docker services..."
+            # Paso 1: Descargar imágenes base actualizadas (opcional si usas tags fijos)
+            docker compose pull || echo "Docker compose pull failed, continuing..."
+
+            # Paso 2: Reconstruir la imagen de la API y levantar todos los servicios
+            # --build: Reconstruye servicios con una sección 'build' si su contexto cambió (tu API)
+            # --force-recreate: Asegura que los contenedores se recreen, útil para cambios de config o imagen
+            # --remove-orphans: Limpia contenedores de servicios que ya no existen en el docker-compose.yaml
+            docker compose up -d --build --force-recreate --remove-orphans || { echo "Docker compose up failed"; exit 1; }
+
+            echo ">>> (Optional) Pruning unused Docker resources..."
+            # Descomenta las siguientes líneas si quieres una limpieza más profunda
+            # echo "Pruning unused Docker images..."
+            # docker image prune -af || echo "Image prune failed, continuing..."
+            # echo "Pruning Docker build cache..."
+            # docker builder prune -af || echo "Builder prune failed, continuing..."
+
+            echo ">>> Deployment to Droplet finished successfully!"
+          EOF
