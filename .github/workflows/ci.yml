@@ -304,7 +304,8 @@ jobs:
 
       - name: Inject synthetic log line
         run: |
-          echo 'May 24 20:00:00 server fail2ban[1234]: NOTICE [sshd] Ban 1.2.3.4' >> ${{ env.FAIL2BAN_LOG_PATH }}
+          echo '2025-05-26 19:00:00,123 fail2ban.filter [1234]: INFO [sshd] Starting' > ${{ env.FAIL2BAN_LOG_PATH }}
+          echo '2025-05-26 20:00:00,123 fail2ban.filter [1234]: NOTICE [sshd] Ban 1.2.3.4' >> ${{ env.FAIL2BAN_LOG_PATH }}
           cat ${{ env.FAIL2BAN_LOG_PATH }}
 
       - name: Wait for API health check
@@ -321,9 +322,6 @@ jobs:
         run: |
           sleep 10
           echo "--- Verificación de logs en API ---"
-
-          # Verificar si el archivo existe en el contenedor API
-          docker exec fail2ban-api ls -la /var/log/fail2ban.log || echo "Log no visible en contenedor API"
 
           # Verificar estado de Loki/Promtail
           docker exec promtail ps aux | grep promtail
