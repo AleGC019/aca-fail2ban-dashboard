@@ -143,15 +143,92 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Python environment
-        run: |
-          python3 -m pip install --upgrade pip
-          pip install -r api/requirements.txt
-          pip install pytest
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
 
-      - name: Run unit tests
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('api/requirements.txt') }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r api/requirements.txt
+          pip install pytest pytest-asyncio pytest-cov
+
+      - name: Set environment variables for tests
+        run: |
+          echo "LOKI_QUERY_URL=http://test-loki:3100/api/v1/query_range" >> $GITHUB_ENV
+
+      - name: Run unit tests with coverage
         run: |
           cd api
-          PYTHONPATH=. pytest tests -q
+          PYTHONPATH=. python -m pytest tests/ -v --tb=short --cov=. --cov-report=html --cov-report=term --cov-report=json --cov-fail-under=60
+        env:
+          LOKI_QUERY_URL: http://test-loki:3100/api/v1/query_range
+
+      - name: Coverage comment
+        id: coverage
+        run: |
+          cd api
+          # Extraer porcentaje de cobertura del archivo JSON
+          COVERAGE=$(python -c "import json; print(json.load(open('coverage.json'))['totals']['percent_covered_display'])")
+          echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
+          
+          # Crear reporte para comentario
+          echo "## 📊 Reporte de Cobertura de Código" > coverage_comment.md
+          echo "" >> coverage_comment.md
+          echo "**Cobertura total: $COVERAGE%**" >> coverage_comment.md
+          echo "" >> coverage_comment.md
+          
+          if (( $(echo "$COVERAGE >= 60" | bc -l) )); then
+            echo "✅ **OBJETIVO CUMPLIDO** - Cobertura mínima del 60% alcanzada" >> coverage_comment.md
+          else
+            echo "❌ **OBJETIVO NO CUMPLIDO** - Se requiere mínimo 60% de cobertura" >> coverage_comment.md
+          fi
+          
+          echo "" >> coverage_comment.md
+          echo "📈 **Detalles:**" >> coverage_comment.md
+          echo "\`\`\`" >> coverage_comment.md
+          python -m coverage report --format=text >> coverage_comment.md
+          echo "\`\`\`" >> coverage_comment.md
+          echo "" >> coverage_comment.md
+          echo "🔗 [Ver reporte completo en artefactos](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> coverage_comment.md
+
+      - name: Comment coverage on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const coverage = fs.readFileSync('api/coverage_comment.md', 'utf8');
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: coverage
+            });
+
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: |
+            api/htmlcov/
+            api/coverage.json
+            api/coverage_comment.md
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: api/test-results.xml
 
   # security-scan:
   #   name: Stage 5 - Security Scans
