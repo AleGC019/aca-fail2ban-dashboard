@@ -23,19 +23,17 @@
 
 </details>
 
-{{# if COVERAGE }}
 <details>
 <summary>Coverage report</summary>
 
 Total coverage: **{{COVERAGE}} %**
 
 </details>
-{{/ if }}
 
 ## Next steps
 - [ ] Investigate failed stages (if any)
 - [ ] Fix lint/formatting issues
-- [ ] Increase test coverage (target ≥ 80 %)
+- [ ] Increase test coverage (target ≥ 60 %)
 
 ---
 

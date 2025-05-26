@@ -394,8 +394,10 @@ jobs:
           export INTEGRATION_STATUS='${{ needs.integration-check.result }}'
           export CLEANUP_STATUS='${{ needs.cleanup.result }}'
 
-          # Example: pull coverage % from an earlier output (fallback to N/A)
-          export COVERAGE='${{ needs.unit-tests.outputs.coverage || '' }}'
+          export COVERAGE='${{ needs.unit-tests.outputs.coverage }}'
+          if [ -z "$COVERAGE" ]; then
+            COVERAGE="N/A"
+          fi
 
           # Replacement using Perl (keeps newlines, handles missing vars)
           perl -pe 's/\{\{(\w+)\}\}/$ENV{$1}/ge' "$TEMPLATE" > "$OUT"
