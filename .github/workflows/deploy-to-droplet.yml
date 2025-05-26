@@ -1,4 +1,4 @@
-name: Deploy to Droplet
+name: CD Deploy to Droplet
 
 # Se activa cuando hay un push a la rama 'develop'
 # Cambia 'develop' a 'main' o la rama que uses para desplegar
