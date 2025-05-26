@@ -280,8 +280,8 @@ jobs:
     needs: [cleanup, lint, build, unit-tests, integration-tests]
     runs-on: ubuntu-latest
     if: |
-      "${{ needs.lint.result }}" != 'success' ||
-      "$needs.build.result" != 'success' ||
+      needs.lint.result != 'success' ||
+      needs.build.result != 'success' ||
       needs.integration-tests.result != 'success' ||
       needs.unit-tests.result != 'success' ||
       needs.cleanup.result != 'success'
@@ -344,13 +344,11 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: coverage-report # Artifact name from unit-tests job
-          # By default, files are restored to their original paths relative to GITHUB_WORKSPACE.
-          # So api/coverage_comment.md will be at $GITHUB_WORKSPACE/api/coverage_comment.md
 
       - name: Prepare Issue body with coverage
         run: |
           COVERAGE_COMMENT_TEXT="N/A (Coverage data not found)"
-          COVERAGE_FILE_PATH="coverage_comment.md"
+          COVERAGE_FILE_PATH="coverage-report/coverage_comment.md"
 
           if [ -f "$COVERAGE_FILE_PATH" ]; then
             if [ -s "$COVERAGE_FILE_PATH" ]; then
