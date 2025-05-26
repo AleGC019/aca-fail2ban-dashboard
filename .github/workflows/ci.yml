@@ -342,20 +342,13 @@ jobs:
           # By default, files are restored to their original paths relative to GITHUB_WORKSPACE.
           # So api/coverage_comment.md will be at $GITHUB_WORKSPACE/api/coverage_comment.md
 
-      # 3. Prepare Issue body with coverage
       - name: Prepare Issue body with coverage
         run: |
-          # ADVISORY: The next line overwrites 'issue-body.md' which was created by the 'Render Issue template' step.
-          # This could lead to loss of substitutions (e.g., for STATUS, WORKFLOW) if not intended.
-          # Consider modifying this logic to process the existing 'issue-body.md' (output of 'Render Issue template')
-          # instead of re-copying the original template here.
-          cp .github/ISSUE_TEMPLATES/ci-pipeline-template.md issue-body.md
-
-          COVERAGE_COMMENT_TEXT="N/A (Coverage data not found)" # Default text
+          COVERAGE_COMMENT_TEXT="N/A (Coverage data not found)"
           COVERAGE_FILE_PATH="api/coverage_comment.md"
 
           if [ -f "$COVERAGE_FILE_PATH" ]; then
-            if [ -s "$COVERAGE_FILE_PATH" ]; then # Check if file is not empty
+            if [ -s "$COVERAGE_FILE_PATH" ]; then
               COVERAGE_COMMENT_TEXT=$(cat "$COVERAGE_FILE_PATH")
             else
               echo "Warning: $COVERAGE_FILE_PATH is empty."
@@ -365,10 +358,9 @@ jobs:
             echo "Warning: $COVERAGE_FILE_PATH not found after attempting to download artifact. Using default text for coverage."
           fi
 
-          # Use an environment variable to pass the coverage comment to Perl.
-          # This is generally safer for multi-line strings or strings with special characters.
           export COVERAGE_COMMENT_TO_INSERT="$COVERAGE_COMMENT_TEXT"
-          perl -0777 -pe 's/\{\{COVERAGE_COMMENT\}\}/\Q$ENV{COVERAGE_COMMENT_TO_INSERT}\E/sg' issue-body.md > issue-body-final.md
+          mv issue-body.md issue-body-temp.md
+          perl -0777 -pe 's/\{\{COVERAGE_COMMENT\}\}/\Q$ENV{COVERAGE_COMMENT_TO_INSERT}\E/sg' issue-body-temp.md > issue-body-final.md
 
       # 4. Create (or comment-on) the Issue
       - name: Create Issue from file
