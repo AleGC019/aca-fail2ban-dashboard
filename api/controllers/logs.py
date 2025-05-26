@@ -605,7 +605,7 @@ async def get_filtered_logs(
 
     for stream in results:
         service_name = stream.get("stream", {}).get("job", "desconocido")
-        for ts, line in stream.get("values", []):
+        for ts, line in stream.get("values", []):   
             timestamp = datetime.fromtimestamp(int(ts) / 1_000_000_000)
             readable_date = timestamp.strftime("%Y-%m-%d %H:%M:%S")
 

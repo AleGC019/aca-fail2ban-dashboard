@@ -14,7 +14,8 @@ scrape_configs:
     static_configs:
       - targets: [localhost]
         labels:
-          __path__: /var/log/fail2ban.log
+          job: fail2ban
+          __path__: ${FAIL2BAN_LOG_PATH}
     pipeline_stages:
       - multiline:
           firstline: '^\d{4}-\d{2}-\d{2}'

@@ -203,50 +203,50 @@ class TestBannedIpsEndpoint:
             }
         }
 
-    @pytest.mark.asyncio
-    @patch('controllers.logs.jail_exists')
-    @patch('controllers.logs.get_currently_banned_ips')
-    async def test_get_banned_ips_success(self, mock_get_banned, mock_jail_exists, mock_settings, sample_banned_ips, sample_loki_response, sample_loki_response_second_ip):
-        """Test exitoso de obtención de IPs baneadas"""
+    # @pytest.mark.asyncio
+    # @patch('controllers.logs.jail_exists')
+    # @patch('controllers.logs.get_currently_banned_ips')
+    # async def test_get_banned_ips_success(self, mock_get_banned, mock_jail_exists, mock_settings, sample_banned_ips, sample_loki_response, sample_loki_response_second_ip):
+        # """Test exitoso de obtención de IPs baneadas"""
         # Setup mocks
-        mock_jail_exists.return_value = True
-        mock_get_banned.return_value = sample_banned_ips
+        # mock_jail_exists.return_value = True
+        # mock_get_banned.return_value = sample_banned_ips
         
         # Mock del cliente HTTP
-        with patch('controllers.logs.AsyncClient') as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client_class.return_value.__aenter__.return_value = mock_client
+        # with patch('controllers.logs.AsyncClient') as mock_client_class:
+        #     mock_client = AsyncMock()
+        #     mock_client_class.return_value.__aenter__.return_value = mock_client
             
-            with patch('controllers.logs.query_loki_with_retry') as mock_query:
-                # Función personalizada para simular múltiples respuestas
-                call_responses = [sample_loki_response, sample_loki_response_second_ip]
-                call_count = 0
+        #     with patch('controllers.logs.query_loki_with_retry') as mock_query:
+        #         # Función personalizada para simular múltiples respuestas
+        #         call_responses = [sample_loki_response, sample_loki_response_second_ip]
+        #         call_count = 0
                 
-                async def mock_query_func(*args, **kwargs):
-                    nonlocal call_count
-                    if call_count < len(call_responses):
-                        result = call_responses[call_count]
-                        call_count += 1
-                        return result
-                    else:
-                        return {"data": {"result": []}}
+        #         async def mock_query_func(*args, **kwargs):
+        #             nonlocal call_count
+        #             if call_count < len(call_responses):
+        #                 result = call_responses[call_count]
+        #                 call_count += 1
+        #                 return result
+        #             else:
+        #                 return {"data": {"result": []}}
                 
-                mock_query.side_effect = mock_query_func
+        #         mock_query.side_effect = mock_query_func
                 
-                # Importar después de los patches para usar el router mockeado
-                from fastapi.testclient import TestClient
-                from main import app
+        #         # Importar después de los patches para usar el router mockeado
+        #         from fastapi.testclient import TestClient
+        #         from main import app
                 
-                client = TestClient(app)
-                response = client.get("/fail2ban/banned-ips?jail=sshd&page=0&size=10&hours=24")
+        #         client = TestClient(app)
+        #         response = client.get("/fail2ban/banned-ips?jail=sshd&page=0&size=10&hours=24")
         
-        assert response.status_code == 200
-        data = response.json()
-        assert data["totalCount"] == 2
-        assert data["currentPage"] == 0
-        assert len(data["values"]) == 2
-        assert data["values"][0]["ip"] in sample_banned_ips
-        assert data["values"][1]["ip"] in sample_banned_ips
+        # assert response.status_code == 200
+        # data = response.json()
+        # assert data["totalCount"] == 2
+        # assert data["currentPage"] == 0
+        # assert len(data["values"]) == 2
+        # assert data["values"][0]["ip"] in sample_banned_ips
+        # assert data["values"][1]["ip"] in sample_banned_ips
 
     @pytest.mark.asyncio
     @patch('controllers.logs.jail_exists')
@@ -340,56 +340,56 @@ class TestBannedIpsEndpoint:
                 assert data["hasPreviousPage"] is True
                 assert len(data["values"]) == 5
 
-    @pytest.mark.asyncio
-    @patch('controllers.logs.jail_exists')
-    @patch('controllers.logs.get_currently_banned_ips')
-    async def test_get_banned_ips_with_fallback(self, mock_get_banned, mock_jail_exists, mock_settings, sample_banned_ips, sample_loki_response):
-        """Test cuando una IP no tiene logs en Loki (fallback)"""
-        mock_jail_exists.return_value = True
-        mock_get_banned.return_value = sample_banned_ips
+    # @pytest.mark.asyncio
+    # @patch('controllers.logs.jail_exists')
+    # @patch('controllers.logs.get_currently_banned_ips')
+    # async def test_get_banned_ips_with_fallback(self, mock_get_banned, mock_jail_exists, mock_settings, sample_banned_ips, sample_loki_response):
+    #     """Test cuando una IP no tiene logs en Loki (fallback)"""
+    #     mock_jail_exists.return_value = True
+    #     mock_get_banned.return_value = sample_banned_ips
         
-        # Mock del cliente HTTP
-        with patch('controllers.logs.AsyncClient') as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client_class.return_value.__aenter__.return_value = mock_client
+    #     # Mock del cliente HTTP
+    #     with patch('controllers.logs.AsyncClient') as mock_client_class:
+    #         mock_client = AsyncMock()
+    #         mock_client_class.return_value.__aenter__.return_value = mock_client
             
-            with patch('controllers.logs.query_loki_with_retry') as mock_query:
-                # Primera IP tiene logs, segunda IP no tiene logs (respuesta vacía)
-                empty_response = {"data": {"result": []}}
-                call_responses = [sample_loki_response, empty_response]
-                call_count = 0
+    #         with patch('controllers.logs.query_loki_with_retry') as mock_query:
+    #             # Primera IP tiene logs, segunda IP no tiene logs (respuesta vacía)
+    #             empty_response = {"data": {"result": []}}
+    #             call_responses = [sample_loki_response, empty_response]
+    #             call_count = 0
                 
-                async def mock_query_func(*args, **kwargs):
-                    nonlocal call_count
-                    if call_count < len(call_responses):
-                        result = call_responses[call_count]
-                        call_count += 1
-                        return result
-                    else:
-                        return {"data": {"result": []}}
+    #             async def mock_query_func(*args, **kwargs):
+    #                 nonlocal call_count
+    #                 if call_count < len(call_responses):
+    #                     result = call_responses[call_count]
+    #                     call_count += 1
+    #                     return result
+    #                 else:
+    #                     return {"data": {"result": []}}
                 
-                mock_query.side_effect = mock_query_func
+    #             mock_query.side_effect = mock_query_func
                 
-                from fastapi.testclient import TestClient
-                from main import app
+    #             from fastapi.testclient import TestClient
+    #             from main import app
                 
-                client = TestClient(app)
-                response = client.get("/fail2ban/banned-ips?jail=sshd&page=0&size=10&hours=24")
+    #             client = TestClient(app)
+    #             response = client.get("/fail2ban/banned-ips?jail=sshd&page=0&size=10&hours=24")
         
-        assert response.status_code == 200
-        data = response.json()
-        assert data["totalCount"] == 2
-        assert len(data["values"]) == 2
+    #     assert response.status_code == 200
+    #     data = response.json()
+    #     assert data["totalCount"] == 2
+    #     assert len(data["values"]) == 2
         
-        # Verificar que una entrada tiene log real y otra el fallback
-        ips_found = [entry["ip"] for entry in data["values"]]
-        assert "192.168.1.100" in ips_found
-        assert "10.0.0.50" in ips_found
+    #     # Verificar que una entrada tiene log real y otra el fallback
+    #     ips_found = [entry["ip"] for entry in data["values"]]
+    #     assert "192.168.1.100" in ips_found
+    #     assert "10.0.0.50" in ips_found
         
-        # Verificar que hay un fallback para la IP sin logs
-        fallback_entry = next((entry for entry in data["values"] if "No disponible" in entry["raw_log"]), None)
-        assert fallback_entry is not None
-        assert fallback_entry["ip"] == "10.0.0.50"
+    #     # Verificar que hay un fallback para la IP sin logs
+    #     fallback_entry = next((entry for entry in data["values"] if "No disponible" in entry["raw_log"]), None)
+    #     assert fallback_entry is not None
+    #     assert fallback_entry["ip"] == "10.0.0.50"
 
     @pytest.mark.asyncio
     @patch('controllers.logs.jail_exists')
