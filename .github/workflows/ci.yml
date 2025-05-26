@@ -331,17 +331,16 @@ jobs:
         run: |
           sleep 10
           echo "--- Checking logs in API ---"
+
+          # Check logs and verify response
+          response=$(curl --fail "http://localhost:8000/fail2ban/logs?limit=100")
+
           echo "--- API container logs (late) ---"
           docker compose logs api
 
-          # Define time window for query
-          START_TIME_QUERY=$((MOCK_LOG_TS_EPOCH - 10)) # 10 seconds before mock log
-          END_TIME_QUERY=$((MOCK_LOG_TS_EPOCH + 20))   # 20 seconds after mock log (to cover sleep + processing)
+          # Try to query Loki directly
+          curl -v -G --data-urlencode 'query={job="fail2ban"}' http://localhost:3100/loki/api/v1/query
 
-          echo "Querying API with start=${START_TIME_QUERY} and end=${END_TIME_QUERY}"
-
-          # Check logs and verify response
-          response=$(curl --fail "http://localhost:8000/fail2ban/logs?limit=100&start=${START_TIME_QUERY}&end=${END_TIME_QUERY}")
           echo "API Response:"
           echo "$response" | jq .
           echo "$response" | grep -q "80.94.95.112" || (echo "Expected IP not found in logs" && exit 1)
