@@ -1,6 +1,8 @@
 server:
   http_listen_port: 9080
   grpc_listen_port: 0
+  log_level: debug
+
 
 positions:
   filename: /tmp/positions.yaml
@@ -30,5 +32,6 @@ scrape_configs:
           pid: pid
           level: level
           jail: jail
+      - stdout: {}
       - output:
           source: msg
