@@ -87,7 +87,7 @@ jobs:
           cp .env.example .env || echo "No .env.example found, creating new .env file"
           echo "FAIL2BAN_LOG_PATH=${{ env.FAIL2BAN_LOG_PATH }}" >> .env
           echo "FAIL2BAN_LOG_PATH=${{ env.FAIL2BAN_LOG_PATH }}" >> $GITHUB_ENV
-          mkdir -p "$(dirname \"${{ env.FAIL2BAN_LOG_PATH}}\")"
+          mkdir -p "$(dirname "${{ env.FAIL2BAN_LOG_PATH}}")"
           touch "${{ env.FAIL2BAN_LOG_PATH}}"
 
       - name: Start service stack
@@ -409,18 +409,17 @@ jobs:
             STATUS="✅ SUCCESSFUL"
             echo "✅ Pipeline completed successfully"
           else
-            STATUS="❌ FAILED" 
+            STATUS="❌ FAILED"
             echo "❌ Pipeline failed - Check individual stages"
             echo "Status: lint=${{ needs.lint.result }}, build=${{ needs.build.result }}, integration-tests=${{ needs.integration-tests.result }}, unit-tests=${{ needs.unit-tests.result }}, cleanup=${{ needs.cleanup.result }}"
           fi
 
-          # Create detailed description
           curl -X POST -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
             -H "Content-Type: application/json" \
             --data '{
               "fields": {
                 "project": { "key": "'"$JIRA_PROJECT_KEY"'" },
-                "summary": "CI Pipeline '"$STATUS"' - '"${{ github.workflow }}"' on '"${{ github.ref_name }}"'",
+                "summary": "CI Pipeline '"$STATUS"' - '${{ github.workflow }}' on '${{ github.ref_name }}'",
                 "description": {
                   "type": "doc",
                   "version": 1,
@@ -428,171 +427,91 @@ jobs:
                     {
                       "type": "heading",
                       "attrs": { "level": 2 },
-                      "content": [
-                        {
-                          "type": "text",
-                          "text": "Pipeline Summary"
-                        }
-                      ]
+                      "content": [{ "type": "text", "text": "Pipeline Summary" }]
                     },
                     {
                       "type": "paragraph",
-                      "content": [
-                        {
-                          "type": "text",
-                          "text": "Status: '"$STATUS"'"
-                        }
-                      ]
+                      "content": [{ "type": "text", "text": "Status: '"$STATUS"'" }]
                     },
                     {
                       "type": "paragraph",
-                      "content": [
-                        {
-                          "type": "text",
-                          "text": "Branch: '"${{ github.ref_name }}"'"
-                        }
-                      ]
+                      "content": [{ "type": "text", "text": "Branch: '${{ github.ref_name }}'" }]
                     },
                     {
                       "type": "paragraph",
-                      "content": [
-                        {
-                          "type": "text",
-                          "text": "Event: '"${{ github.event_name }}"'"
-                        }
-                      ]
+                      "content": [{ "type": "text", "text": "Event: '${{ github.event_name }}'" }]
                     },
                     {
                       "type": "paragraph",
-                      "content": [
-                        {
-                          "type": "text",
-                          "text": "Commit: '"${{ github.sha }}"'"
-                        }
-                      ]
+                      "content": [{ "type": "text", "text": "Commit: '${{ github.sha }}'" }]
                     },
                     {
                       "type": "paragraph",
-                      "content": [
-                        {
-                          "type": "text",
-                          "text": "Author: '"${{ github.actor }}"'"
-                        }
-                      ]
+                      "content": [{ "type": "text", "text": "Author: '${{ github.actor }}'" }]
                     },
                     {
                       "type": "paragraph",
-                      "content": [
-                        {
-                          "type": "text",
-                          "text": "Commit message: ''"${{ github.event.head_commit.message }}"'"
-                        }
-                      ]
+                      "content": [{ "type": "text", "text": "Commit message: '${{ github.event.head_commit.message }}'" }]
                     },
                     {
                       "type": "heading",
                       "attrs": { "level": 3 },
-                      "content": [
-                        {
-                          "type": "text",
-                          "text": "Pipeline Stages"
-                        }
-                      ]
+                      "content": [{ "type": "text", "text": "Pipeline Stages" }]
                     },
                     {
                       "type": "paragraph",
-                      "content": [
-                        {
-                          "type": "text",
-                          "text": "✅ Stage 1 - Code Quality Check (Lint)"
-                        }
-                      ]
+                      "content": [{ "type": "text", "text": "✅ Stage 1 - Code Quality Check (Lint)" }]
                     },
                     {
                       "type": "paragraph",
-                      "content": [
-                        {
-                          "type": "text",
-                          "text": "'${{ needs.build.result == 'success' && '✅' || '❌' }}' Stage 2 - Container Build"
-                        }
-                      ]
+                      "content": [{ "type": "text", "text": "${{ needs.build.result == 'success' && '✅' || '❌' }} Stage 2 - Container Build" }]
                     },
                     {
                       "type": "paragraph",
-                      "content": [
-                        {
-                          "type": "text",
-                          "text": "'${{ needs.integration-tests.result == 'success' && '✅' || '❌' }}' Stage 3 - Integration & Flow Test"
-                        }
-                      ]
+                      "content": [{ "type": "text", "text": "${{ needs.integration-tests.result == 'success' && '✅' || '❌' }} Stage 3 - Integration & Flow Test" }]
                     },
                     {
                       "type": "paragraph",
-                      "content": [
-                        {
-                          "type": "text",
-                          "text": "'${{ needs.unit-tests.result == 'success' && '✅' || '❌' }}' Stage 4 - Unit Tests"
-                        }
-                      ]
+                      "content": [{ "type": "text", "text": "${{ needs.unit-tests.result == 'success' && '✅' || '❌' }} Stage 4 - Unit Tests" }]
                     },
                     {
                       "type": "paragraph",
-                      "content": [
-                        {
-                          "type": "text",
-                          "text": "'${{ needs.cleanup.result == 'success' && '✅' || '❌' }}' Stage 5 - Cleanup"
-                        }
-                      ]
+                      "content": [{ "type": "text", "text": "${{ needs.cleanup.result == 'success' && '✅' || '❌' }} Stage 5 - Cleanup" }]
                     },
                     {
                       "type": "heading",
                       "attrs": { "level": 3 },
+                      "content": [{ "type": "text", "text": "Links" }]
+                    },
+                    {
+                      "type": "paragraph",
                       "content": [
+                        { "type": "text", "text": "View pipeline: " },
                         {
                           "type": "text",
-                          "text": "Links"
+                          "text": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+                          "marks": [{
+                            "type": "link",
+                            "attrs": {
+                              "href": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                            }
+                          }]
                         }
                       ]
                     },
                     {
                       "type": "paragraph",
                       "content": [
+                        { "type": "text", "text": "View commit: " },
                         {
                           "type": "text",
-                          "text": "View pipeline: "
-                        },
-                        {
-                          "type": "text",
-                          "text": "'"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"'",
-                          "marks": [
-                            {
-                              "type": "link",
-                              "attrs": {
-                                "href": "'"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"'"
-                              }
+                          "text": "${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}",
+                          "marks": [{
+                            "type": "link",
+                            "attrs": {
+                              "href": "${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"
                             }
-                          ]
-                        }
-                      ]
-                    },
-                    {
-                      "type": "paragraph",
-                      "content": [
-                        {
-                          "type": "text",
-                          "text": "View commit: "
-                        },
-                        {
-                          "type": "text",
-                          "text": "'"${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"'",
-                          "marks": [
-                            {
-                              "type": "link",
-                              "attrs": {
-                                "href": "'"${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"'"
-                              }
-                            }
-                          ]
+                          }]
                         }
                       ]
                     }
@@ -602,8 +521,8 @@ jobs:
                 "labels": [ 
                   "ci-pipeline", 
                   "fail2ban-dashboard", 
-                  "'"${{ github.ref_name }}"'",
-                  "'"${{ github.event_name }}"'"
+                  "${{ github.ref_name }}",
+                  "${{ github.event_name }}"
                 ]
               }
             }' \
