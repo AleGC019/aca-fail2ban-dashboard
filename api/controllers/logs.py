@@ -431,7 +431,7 @@ async def get_filtered_logs(
             ip = ip_match.group(0) if ip_match else None
 
             level_match = re.search(r"\b(INFO|DEBUG|WARNING|ERROR|CRITICAL|NOTICE)\b", line)
-            log_level = level_match.group(1).upper() if level_match else "INFO"
+            log_level = level_match.group(1).upper() if level_match else "UNKNOWN"
 
             event_match = re.search(r"\] (Found|Processing|Total|Ban|Unban|Started|Stopped|Banned|Unbanned)", line)
             event_type = event_match.group(1) if event_match else "Unknown"
