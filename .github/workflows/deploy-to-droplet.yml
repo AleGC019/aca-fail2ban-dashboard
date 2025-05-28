@@ -7,7 +7,6 @@ on:
     branches:
       - develop
       - feature/*
-      - hotfix/*
 
 jobs:
   deploy:
@@ -334,14 +333,14 @@ jobs:
         if: steps.compute_status.outputs.deployment_successful == 'true' && steps.search_issues.outputs.has_existing_issue == 'true'
         run: |
           echo "Closing issue #${{ steps.search_issues.outputs.existing_issue_number }} as deployment was successful"
-          
+
           curl -X PATCH \
             -H "Authorization: Bearer ${{ github.token }}" \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "${{ github.api_url }}/repos/${{ github.repository }}/issues/${{ steps.search_issues.outputs.existing_issue_number }}" \
             -d '{"state": "closed", "state_reason": "completed"}'
-          
+
           echo "✅ Closed issue #${{ steps.search_issues.outputs.existing_issue_number }}"
 
       - name: Close newly created issue if deployment was successful
@@ -349,16 +348,16 @@ jobs:
         run: |
           # Buscar el issue recién creado y cerrarlo
           sleep 2 # Pequeña pausa para asegurar que el issue se haya creado
-          
+
           SEARCH_QUERY="repo:${{ github.repository }} is:issue is:open label:cd-deployment label:${{ github.ref_name }} label:${{ github.workflow }}"
-          
+
           RESPONSE=$(curl -s -H "Authorization: Bearer ${{ github.token }}" \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "https://api.github.com/search/issues?q=$(echo "$SEARCH_QUERY" | sed 's/ /%20/g')")
 
           ISSUE_NUMBER=$(echo "$RESPONSE" | jq -r '.items[0].number // empty')
-          
+
           if [ -n "$ISSUE_NUMBER" ]; then
             echo "Closing newly created issue #$ISSUE_NUMBER as deployment was successful"
             
