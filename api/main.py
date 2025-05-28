@@ -21,8 +21,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 app = FastAPI(
     title="Fail2ban Log API",
     description="API para consultar logs de Fail2ban y gestionar baneos.",
-    version="1.0.0"
+    version="1.0.0",
     # Las rutas por defecto para /docs y /redoc ya están habilitadas
+
 )
 
 # --- Configuración de CORS (la que ya tenías) ---
@@ -48,7 +49,8 @@ templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def read_root(request: Request):
     """
-    Página de inicio de la API que dirige a la documentación.
+    Estado de la API y enlaces a documentación.
+    Accesible en: https://alertasfail2ban.xmakuno.com/api/
     """
     # Renderiza 'index.html' desde el directorio 'templates'
     # y le pasa las variables 'project_name' y 'current_year'
