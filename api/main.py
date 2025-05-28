@@ -23,7 +23,6 @@ app = FastAPI(
     description="API para consultar logs de Fail2ban y gestionar baneos.",
     version="1.0.0",
     # Las rutas por defecto para /docs y /redoc ya están habilitadas
-
 )
 
 # --- Configuración de CORS (la que ya tenías) ---
