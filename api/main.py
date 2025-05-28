@@ -40,7 +40,7 @@ app.add_middleware(
 # --- Montar directorio estático para CSS ---
 # Esto le dice a FastAPI: "Cualquier solicitud que comience con '/static'..."
 # "...debe servirse desde el directorio 'static' que está dentro de BASE_DIR (tu carpeta 'api/static/')"
-app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
+app.mount("/api/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 
 # --- Configurar plantillas Jinja2 ---
 # Esto le dice a FastAPI: "Busca mis plantillas HTML en el directorio 'templates'..."
