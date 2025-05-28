@@ -61,7 +61,7 @@ jobs:
             echo ">>> Deployment to Droplet finished successfully!"
           EOF
 
-notify-github:
+  notify-github:
     name: Smart GitHub Issue Management - CD Failures
     needs: [deploy]
     runs-on: ubuntu-latest
