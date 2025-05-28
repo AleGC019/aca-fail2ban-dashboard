@@ -8,6 +8,8 @@ on:
       - develop
       - feature/*
 
+      #Test para verificar funcion de Issues
+
 jobs:
   deploy:
     name: Deploy Application to DigitalOcean Droplet
