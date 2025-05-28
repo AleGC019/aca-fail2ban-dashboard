@@ -24,6 +24,8 @@ app = FastAPI(
     version="1.0.0",
     # Las rutas por defecto para /docs y /redoc ya están habilitadas
     openapi_url="/api/openapi.json",  # Cambia la URL de OpenAPI si lo deseas
+    docs_url="/api/docs",  # Cambia la URL de Swagger UI si lo deseas
+    redoc_url="/api/redoc"  # Cambia la URL de ReDoc si lo deseas
 )
 
 # --- Configuración de CORS (la que ya tenías) ---
