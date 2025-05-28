@@ -6,9 +6,6 @@ on:
   push:
     branches:
       - develop
-      - feature/*
-
-      #Test para verificar funcion de Issues
 
 jobs:
   deploy:
