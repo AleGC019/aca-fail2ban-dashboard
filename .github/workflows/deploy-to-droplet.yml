@@ -59,3 +59,235 @@ jobs:
 
             echo ">>> Deployment to Droplet finished successfully!"
           EOF
+
+  notify-github:
+    name: Smart GitHub Issue Management - CD Failures
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    if: always() && needs.deploy.result == 'failure'
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Compute deployment status
+        id: compute_status
+        run: |
+          if [ "${{ needs.deploy.result }}" == "success" ]; then
+            echo "status=✅ SUCCESS" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=❌ FAILED"  >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Search for existing CD deployment issues
+        id: search_issues
+        run: |
+          # Search for open issues with specific labels for this branch and workflow
+          SEARCH_QUERY="repo:${{ github.repository }} is:issue is:open label:cd-deployment label:${{ github.ref_name }} label:${{ github.workflow }}"
+
+          echo "Searching for existing issues with query: $SEARCH_QUERY"
+
+          RESPONSE=$(curl -s -H "Authorization: Bearer ${{ github.token }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/search/issues?q=$(echo "$SEARCH_QUERY" | sed 's/ /%20/g')")
+
+          ISSUE_COUNT=$(echo "$RESPONSE" | jq -r '.total_count // 0')
+          echo "Found $ISSUE_COUNT existing issues"
+
+          if [ "$ISSUE_COUNT" -gt 0 ]; then
+            ISSUE_NUMBER=$(echo "$RESPONSE" | jq -r '.items[0].number')
+            ISSUE_URL=$(echo "$RESPONSE" | jq -r '.items[0].html_url')
+            echo "existing_issue_number=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
+            echo "existing_issue_url=$ISSUE_URL" >> "$GITHUB_OUTPUT"
+            echo "has_existing_issue=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_existing_issue=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create deployment issue body
+        id: render_issue
+        shell: bash
+        run: |
+          export STATUS='${{ steps.compute_status.outputs.status }}'
+          export WORKFLOW='${{ github.workflow }}'
+          export REF_NAME='${{ github.ref_name }}'
+          export EVENT_NAME='${{ github.event_name }}'
+          export SHA='${{ github.sha }}'
+          export SHORT_SHA='${{ github.sha }}' ; SHORT_SHA=${SHORT_SHA:0:7} ; export SHORT_SHA
+          export ACTOR='${{ github.actor }}'
+          export RUN_URL='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+          export REPO='${{ github.repository }}'
+          export TIMESTAMP="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          export DEPLOY_STATUS='${{ needs.deploy.result }}'
+          export DROPLET_IP='${{ secrets.DROPLET_IP }}'
+
+          cat > "issue-body.md" << EOF
+          # 🚨 CD Deployment Failure Alert
+
+          ## 📋 Deployment Summary
+          **Status:** ${STATUS}  
+          **Environment:** Production Droplet  
+          **Branch:** \`${REF_NAME}\`  
+          **Commit:** [\`${SHORT_SHA}\`](https://github.com/${REPO}/commit/${SHA})  
+          **Triggered by:** @${ACTOR}  
+          **Time:** ${TIMESTAMP}
+
+          ## 🔄 Deployment Details
+
+          | **Component**        | **Status**           | **Description**                                    |
+          | -------------------- | -------------------- | -------------------------------------------------- |
+          | **SSH Connection**   | \`${DEPLOY_STATUS}\` | Connection to DigitalOcean Droplet                |
+          | **Git Operations**   | \`${DEPLOY_STATUS}\` | Branch checkout and pull from repository          |
+          | **Docker Services**  | \`${DEPLOY_STATUS}\` | Container rebuild and service restart              |
+
+          ## 🔧 Deployment Process Failed At:
+          - **Target Server:** \`${DROPLET_IP}\`
+          - **Project Path:** \`${{ secrets.PROJECT_PATH_ON_DROPLET }}\`
+          - **Branch:** \`${REF_NAME}\`
+
+          ## 📊 What This Means:
+          - ❌ The API deployment to production has failed
+          - 🔄 Previous version may still be running
+          - 🚨 Manual intervention required
+
+          ## 🔗 Quick Actions
+          - [View Deployment Run](${RUN_URL})
+          - [View Failed Commit](https://github.com/${REPO}/commit/${SHA})
+          - [View Branch](https://github.com/${REPO}/tree/${REF_NAME})
+          - [SSH to Droplet](ssh://${{ secrets.DROPLET_SSH_USER }}@${DROPLET_IP}:${{ secrets.DROPLET_SSH_PORT || 22 }})
+
+          ## 🛠️ Troubleshooting Steps:
+          1. Check SSH connectivity to the droplet
+          2. Verify Docker services are running
+          3. Check application logs: \`docker compose logs\`
+          4. Verify available disk space and resources
+          5. Check network connectivity and firewall rules
+
+          ---
+          **Auto-generated by CD Pipeline** | **Workflow:** \`${WORKFLOW}\` | **Run ID:** \`${{ github.run_id }}\`
+
+          _This issue will be automatically closed when the deployment succeeds._
+          EOF
+
+      - name: Create comment template for existing issue
+        if: steps.search_issues.outputs.has_existing_issue == 'true'
+        id: render_comment
+        shell: bash
+        run: |
+          export STATUS='${{ steps.compute_status.outputs.status }}'
+          export SHA='${{ github.sha }}'
+          export SHORT_SHA='${{ github.sha }}' ; SHORT_SHA=${SHORT_SHA:0:7} ; export SHORT_SHA
+          export ACTOR='${{ github.actor }}'
+          export RUN_URL='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+          export REPO='${{ github.repository }}'
+          export TIMESTAMP="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          export DEPLOY_STATUS='${{ needs.deploy.result }}'
+
+          cat > "comment-body.md" << EOF
+          ## 🔄 Deployment Update - ${SHORT_SHA}
+
+          **New Failure Detected:** ${STATUS}  
+          **Commit:** [\`${SHORT_SHA}\`](https://github.com/${REPO}/commit/${SHA})  
+          **Workflow Run:** [View Details](${RUN_URL})  
+          **Triggered by:** @${ACTOR}  
+          **Time:** ${TIMESTAMP}
+
+          ### 📊 Current Deployment Status
+
+          | **Stage**               | **Status**             | **Description**                           |
+          | ----------------------- | ---------------------- | ----------------------------------------- |
+          | **Deployment Process** | \`${DEPLOY_STATUS}\`   | Full deployment pipeline to droplet      |
+
+          ### 🔗 Quick Actions
+          - [View Workflow Run](${RUN_URL})
+          - [View Commit](https://github.com/${REPO}/commit/${SHA})
+          - [Check Droplet Status](https://cloud.digitalocean.com/droplets)
+
+          ---
+          _This comment was automatically generated by the CD deployment pipeline. Issue will be automatically closed when deployment succeeds._
+          EOF
+
+      - name: Comment on existing issue
+        if: steps.search_issues.outputs.has_existing_issue == 'true'
+        run: |
+          COMMENT_BODY=$(cat comment-body.md | jq -Rs .)
+          curl -X POST \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "${{ github.api_url }}/repos/${{ github.repository }}/issues/${{ steps.search_issues.outputs.existing_issue_number }}/comments" \
+            -d "{\"body\": $COMMENT_BODY}"
+
+          echo "✅ Added comment to existing issue #${{ steps.search_issues.outputs.existing_issue_number }}"
+          echo "🔗 Issue URL: ${{ steps.search_issues.outputs.existing_issue_url }}"
+
+      - name: Create new issue
+        if: steps.search_issues.outputs.has_existing_issue == 'false'
+        uses: peter-evans/create-issue-from-file@v5
+        with:
+          title: |
+            CD Deployment ${{ steps.compute_status.outputs.status }} - ${{ github.workflow }} on ${{ github.ref_name }}
+          content-filepath: issue-body.md
+          assignees: ${{ github.actor }}
+          labels: |
+            cd-deployment,
+            production,
+            aca-fail2ban-dashboard,
+            ${{ github.ref_name }},
+            ${{ github.event_name }},
+            ${{ github.workflow }}
+
+  close-resolved-issues:
+    name: Close Resolved Deployment Issues
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    if: always() && needs.deploy.result == 'success'
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - name: Search and close resolved CD deployment issues
+        run: |
+          # Search for open issues with specific labels for this branch and workflow
+          SEARCH_QUERY="repo:${{ github.repository }} is:issue is:open label:cd-deployment label:${{ github.ref_name }} label:${{ github.workflow }}"
+
+          echo "Searching for resolved issues with query: $SEARCH_QUERY"
+
+          RESPONSE=$(curl -s -H "Authorization: Bearer ${{ github.token }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/search/issues?q=$(echo "$SEARCH_QUERY" | sed 's/ /%20/g')")
+
+          ISSUE_COUNT=$(echo "$RESPONSE" | jq -r '.total_count // 0')
+          echo "Found $ISSUE_COUNT issues to potentially close"
+
+          if [ "$ISSUE_COUNT" -gt 0 ]; then
+            echo "$RESPONSE" | jq -r '.items[].number' | while read -r ISSUE_NUMBER; do
+              echo "Closing issue #$ISSUE_NUMBER as deployment is now successful"
+              
+              # Add success comment
+              COMMENT_BODY="## ✅ Deployment Resolved!\n\n**Status:** Deployment successful  \n**Commit:** [\`${{ github.sha }}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})  \n**Workflow Run:** [View Details](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})  \n**Resolved by:** @${{ github.actor }}  \n**Time:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')\n\nClosing this issue as the CD deployment is now successful. 🚀\n\n---\n_This comment was automatically generated by the CD deployment pipeline._"
+              
+              curl -X POST \
+                -H "Authorization: Bearer ${{ github.token }}" \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "${{ github.api_url }}/repos/${{ github.repository }}/issues/$ISSUE_NUMBER/comments" \
+                -d "{\"body\": \"$COMMENT_BODY\"}"
+              
+              # Close the issue
+              curl -X PATCH \
+                -H "Authorization: Bearer ${{ github.token }}" \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "${{ github.api_url }}/repos/${{ github.repository }}/issues/$ISSUE_NUMBER" \
+                -d '{"state": "closed", "state_reason": "completed"}'
+              
+              echo "✅ Closed issue #$ISSUE_NUMBER"
+            done
+          else
+            echo "No issues found to close"
+          fi
