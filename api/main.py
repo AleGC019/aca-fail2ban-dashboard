@@ -23,9 +23,6 @@ app = FastAPI(
     description="API para consultar logs de Fail2ban y gestionar baneos.",
     version="1.0.0",
     # Las rutas por defecto para /docs y /redoc ya están habilitadas
-    openapi_url="/api/openapi.json",  # Cambia la URL de OpenAPI si lo deseas
-    docs_url="/api/docs",  # Cambia la URL de Swagger UI si lo deseas
-    redoc_url="/api/redoc"  # Cambia la URL de ReDoc si lo deseas
 )
 
 # --- Configuración de CORS (la que ya tenías) ---
@@ -40,7 +37,7 @@ app.add_middleware(
 # --- Montar directorio estático para CSS ---
 # Esto le dice a FastAPI: "Cualquier solicitud que comience con '/static'..."
 # "...debe servirse desde el directorio 'static' que está dentro de BASE_DIR (tu carpeta 'api/static/')"
-app.mount("/api/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
+app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 
 # --- Configurar plantillas Jinja2 ---
 # Esto le dice a FastAPI: "Busca mis plantillas HTML en el directorio 'templates'..."
