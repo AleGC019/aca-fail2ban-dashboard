@@ -53,21 +53,45 @@ jobs:
             echo ">>> Triggered from branch: $TRIGGERED_FROM"
             echo ">>> Deploying branch: $DEPLOY_BRANCH"
 
+            # Validar que la rama no esté vacía
+            if [ -z "$DEPLOY_BRANCH" ]; then
+              echo "❌ Error: DEPLOY_BRANCH is empty or not set"
+              exit 1
+            fi
+
             echo ">>> Navigating to project directory: ${{ secrets.PROJECT_PATH_ON_DROPLET }}"
             cd ${{ secrets.PROJECT_PATH_ON_DROPLET }} || { echo "Failed to cd into project directory"; exit 1; }
 
+            echo ">>> Checking available branches..."
+            git branch -a
+
             echo ">>> Ensuring current branch is correct ($DEPLOY_BRANCH) and pulling latest changes..."
+            # Verificar en qué rama estamos actualmente
             CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+            echo ">>> Current branch: $CURRENT_BRANCH"
+            
             if [ "$CURRENT_BRANCH" != "$DEPLOY_BRANCH" ]; then
               echo "Warning: Not on $DEPLOY_BRANCH branch, currently on $CURRENT_BRANCH. Attempting to switch."
-              git checkout $DEPLOY_BRANCH || { echo "Failed to checkout $DEPLOY_BRANCH branch"; exit 1; }
+              
+              # Verificar si la rama existe localmente
+              if git show-ref --verify --quiet refs/heads/$DEPLOY_BRANCH; then
+                echo ">>> Branch $DEPLOY_BRANCH exists locally, checking out..."
+                git checkout $DEPLOY_BRANCH || { echo "Failed to checkout $DEPLOY_BRANCH branch"; exit 1; }
+              else
+                echo ">>> Branch $DEPLOY_BRANCH doesn't exist locally, fetching from origin..."
+                git fetch origin || { echo "Failed to fetch from origin"; exit 1; }
+                git checkout -b $DEPLOY_BRANCH origin/$DEPLOY_BRANCH || { echo "Failed to checkout $DEPLOY_BRANCH branch from origin"; exit 1; }
+              fi
             fi
+            
+            # Actualizar la rama con los últimos cambios
             git pull origin $DEPLOY_BRANCH || { echo "Failed to pull changes from $DEPLOY_BRANCH"; exit 1; }
 
             echo ">>> Updating and restarting Docker services..."
+            # Actualizar las imágenes de Docker
             docker compose pull || echo "Docker compose pull failed, continuing..."
+            # Reconstruir y reiniciar los servicios
             docker compose up -d --build --force-recreate --remove-orphans || { echo "Docker compose up failed"; exit 1; }
 
             echo ">>> Deployment to Droplet finished successfully!"
-            echo ">>> Deployed branch: $DEPLOY_BRANCH (triggered from: $TRIGGERED_FROM)"
-          EOF
+            echo ">>> Deployed branch: $DEPLOY_BRANCH (triggered from:
