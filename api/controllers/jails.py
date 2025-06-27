@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from data.models import IPActionRequest, ActionResponse
 from services.fail2ban import is_ip_banned, jail_exists, run_fail2ban_command, is_valid_ip
 from typing import List
+from services.auth import get_current_user
 
 router = APIRouter()
 
@@ -83,7 +84,7 @@ async def execute_ip_action(jail_name: str, action: str, ip_address: str) -> Act
 #    )
 
 @router.post("/jails/{jail_name}/ban-ip", response_model=ActionResponse)
-async def ban_ip_in_jail(jail_name: str, request_body: IPActionRequest):
+async def ban_ip_in_jail(jail_name: str, request_body: IPActionRequest, current_user: dict = Depends(get_current_user)):
     if not is_valid_ip(request_body.ip_address):
         raise HTTPException(status_code=400, detail="Formato de dirección IP inválido.")
     
@@ -117,7 +118,7 @@ async def ban_ip_in_jail(jail_name: str, request_body: IPActionRequest):
     )
 
 @router.post("/jails/{jail_name}/unban-ip", response_model=ActionResponse)
-async def unban_ip_in_jail(jail_name: str, request_body: IPActionRequest):
+async def unban_ip_in_jail(jail_name: str, request_body: IPActionRequest, current_user: dict = Depends(get_current_user)):
     if not is_valid_ip(request_body.ip_address):
         raise HTTPException(status_code=400, detail="Formato de dirección IP inválido.")
     
@@ -151,7 +152,7 @@ async def unban_ip_in_jail(jail_name: str, request_body: IPActionRequest):
     )
 
 @router.get("/jails", response_model=List[str])
-async def get_jails():
+async def get_jails(current_user: dict = Depends(get_current_user)):
     output = run_fail2ban_command(["status"])
     line = next(
         (

@@ -1,10 +1,10 @@
 # controllers/logs.py
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException, Depends
 from httpx import AsyncClient, RequestError, HTTPStatusError
 # --- CAMBIO AQUÍ ---
 # Se importa LOKI_QUERY_URL directamente, no 'settings'
-from services.fail2ban import get_currently_banned_ips, jail_exists
+from services.fail2ban import get_currently_banned_ips, jail_exists, get_banned_ips_with_details
 from configuration.settings import settings
 # -------------------
 import asyncio
@@ -22,6 +22,7 @@ import json
 import httpx
 from urllib.parse import quote
 import random
+from services.auth import get_current_user
 
 # Importaciones necesarias que podrían faltar según el contexto completo
 # Asegúrate de que estas u otras dependencias necesarias estén aquí si las usas en otras partes del archivo
@@ -99,7 +100,8 @@ async def query_loki_with_retry_banned_ips(client: AsyncClient, url: str, max_re
 async def websocket_fail2ban_logs_stream_v2(
     websocket: WebSocket,
     limit: int = Query(10, description="Líneas iniciales."),
-    start: Optional[int] = Query(None, description="Timestamp UNIX en ns para inicio.")
+    start: Optional[int] = Query(None, description="Timestamp UNIX en ns para inicio."),
+    current_user: dict = Depends(get_current_user)
 ):
     await websocket.accept()
     client_host = websocket.client.host
@@ -236,7 +238,8 @@ async def get_banned_ips(
     page: int = Query(0, ge=0, description="Número de página"),
     size: int = Query(10, ge=1, le=100, description="Tamaño de página"),
     hours: int = Query(24, ge=1, le=168, description="Rango de tiempo en horas hacia atrás"),
-    jail: str = Query("sshd", description="Nombre del jail de Fail2ban")
+    jail: str = Query("sshd", description="Nombre del jail de Fail2ban"),
+    current_user: dict = Depends(get_current_user)
 ) -> dict:
     """
     Obtiene IPs actualmente baneadas y sus logs de baneo desde Loki, buscando el formato exacto:
@@ -362,7 +365,7 @@ async def get_banned_ips(
     }
 
 @router.get("/fail2ban/current-banned-ips")
-async def get_current_banned_ips(jail: str = "sshd"):
+async def get_current_banned_ips(jail: str = "sshd", current_user: dict = Depends(get_current_user)):
     if not jail_exists(jail):
         raise HTTPException(status_code=400, detail=f"El jail {jail} no existe.")
     try:
@@ -381,7 +384,8 @@ async def get_filtered_logs(
         end: Optional[int] = Query(None, description="Fin del rango de tiempo (timestamp UNIX en segundos)."),
         service: Optional[str] = Query(None, description="Filtrar por etiqueta 'job' (e.g., 'fail2ban')."),
         level: Optional[str] = Query(None, description="Filtrar por nivel de log (buscar texto en el mensaje)."),
-        filter_text: Optional[str] = Query(None, description="Texto libre a buscar en el mensaje del log.")
+        filter_text: Optional[str] = Query(None, description="Texto libre a buscar en el mensaje del log."),
+        current_user: dict = Depends(get_current_user)
 ):
     # Establecer valores por defecto si no se proporcionan
     now_sec = int(time.time())
@@ -496,7 +500,7 @@ async def get_filtered_logs(
 
 
 @router.get("/fail2ban/stats", summary="Fail2ban statistics overview")
-async def get_fail2ban_stats():
+async def get_fail2ban_stats(current_user: dict = Depends(get_current_user)):
 
     end_time = int(time.time())  # Tiempo actual en segundos (UNIX timestamp)
     start_time_current = end_time - 3600  # Hace 1 hora
@@ -574,3 +578,12 @@ async def get_fail2ban_stats():
 @router.get("/health")
 async def health():
     return {"status": "ok", "message": "API de Logs y Gestión de Fail2ban funcionando"}
+
+# ruta extra de prueba para lo de las ips baneadas
+@router.get("/fail2ban/banned-ips-testing")
+async def banned_ips(jail: str = "sshd", hours: int = 24):
+    try:
+        entries = get_banned_ips_with_details(jail, hours=hours)
+        return {"values": entries}
+    except HTTPException as e:
+        return {"error": e.detail}

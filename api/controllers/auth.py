@@ -1,0 +1,22 @@
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordRequestForm
+from services.auth import authenticate_user, create_access_token, register_user
+from data.user_model import UserIn, Token
+
+router = APIRouter(prefix="/auth", tags=["Auth"])
+
+@router.post("/register", status_code=201)
+async def register(user: UserIn):
+    try:
+        await register_user(user.email, user.password)
+        return {"message": "User created"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.post("/login", response_model=Token)
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    user = await authenticate_user(form_data.username, form_data.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    token = create_access_token({"sub": user["email"]})
+    return {"access_token": token, "token_type": "bearer"}
