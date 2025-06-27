@@ -94,4 +94,5 @@ jobs:
             docker compose up -d --build --force-recreate --remove-orphans || { echo "Docker compose up failed"; exit 1; }
 
             echo ">>> Deployment to Droplet finished successfully!"
-            echo ">>> Deployed branch: $DEPLOY_BRANCH (triggered from:
+            echo ">>> Deployed branch: $DEPLOY_BRANCH (triggered from: $TRIGGERED_FROM)"
+          EOF
