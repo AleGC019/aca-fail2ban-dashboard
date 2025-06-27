@@ -3,9 +3,6 @@ import subprocess
 from fastapi import HTTPException
 from typing import List
 import re
-from fastapi import HTTPException
-import subprocess
-import re
 from datetime import datetime, timedelta
 from dateutil import parser as date_parser
 

@@ -1,14 +1,11 @@
-from fastapi import HTTPException
+from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from passlib.context import CryptContext
 from jose import jwt, JWTError
 from datetime import datetime, timedelta
 from data.user_repository import get_user_by_email, create_user
 from dotenv import load_dotenv
-from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
 import os
-from fastapi import Depends, HTTPException, status
 
 # Cargar variables del archivo .env
 load_dotenv()
