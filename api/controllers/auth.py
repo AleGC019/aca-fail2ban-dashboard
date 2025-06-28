@@ -3,7 +3,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from services.auth import authenticate_user, create_access_token, register_user
 from data.user_model import UserIn, Token
 
-router = APIRouter(prefix="/auth", tags=["Auth"])
+router = APIRouter()
 
 @router.post("/register", status_code=201)
 async def register(user: UserIn):
