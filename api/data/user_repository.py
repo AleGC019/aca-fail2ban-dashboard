@@ -9,5 +9,19 @@ users_collection = db["users"]
 async def get_user_by_email(email: str):
     return await users_collection.find_one({"email": email})
 
+async def get_user_by_username(username: str):
+    return await users_collection.find_one({"username": username})
+
+async def get_user_by_username_or_email(username_or_email: str):
+    """
+    Busca un usuario por username o email
+    """
+    return await users_collection.find_one({
+        "$or": [
+            {"username": username_or_email},
+            {"email": username_or_email}
+        ]
+    })
+
 async def create_user(user: dict):
     await users_collection.insert_one(user)

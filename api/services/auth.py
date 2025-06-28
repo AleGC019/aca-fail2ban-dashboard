@@ -3,7 +3,7 @@ from fastapi.security import OAuth2PasswordBearer, HTTPBearer, HTTPAuthorization
 from passlib.context import CryptContext
 from jose import jwt, JWTError
 from datetime import datetime, timedelta
-from data.user_repository import get_user_by_email, create_user
+from data.user_repository import get_user_by_email, get_user_by_username, get_user_by_username_or_email, create_user
 from dotenv import load_dotenv
 import os
 
@@ -29,14 +29,24 @@ def create_access_token(data: dict) -> str:
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, secret, algorithm=algorithm)
 
-async def register_user(email: str, password: str):
+async def register_user(username: str, email: str, password: str):
+    # Verificar si el usuario ya existe por email
     if await get_user_by_email(email):
-        raise Exception("User already exists")
+        raise Exception("Ya existe un usuario con este email")
+    
+    # Verificar si el usuario ya existe por username
+    if await get_user_by_username(username):
+        raise Exception("Ya existe un usuario con este nombre de usuario")
+    
     hashed = hash_password(password)
-    await create_user({"email": email, "hashed_password": hashed})
+    await create_user({
+        "username": username,
+        "email": email, 
+        "hashed_password": hashed
+    })
 
-async def authenticate_user(email: str, password: str):
-    user = await get_user_by_email(email)
+async def authenticate_user(username_or_email: str, password: str):
+    user = await get_user_by_username_or_email(username_or_email)
     if not user or not verify_password(password, user["hashed_password"]):
         return None
     return user
@@ -60,7 +70,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(b
     except JWTError:
         raise credentials_exception
     
-    # Buscar el usuario en la base de datos
+    # Buscar el usuario en la base de datos por email (ya que el token contiene el email)
     user = await get_user_by_email(email)
     if user is None:
         raise credentials_exception
