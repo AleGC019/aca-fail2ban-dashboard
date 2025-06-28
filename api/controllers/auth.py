@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import OAuth2PasswordRequestForm
-from services.auth import authenticate_user, create_access_token, register_user, get_current_user
+from services.auth import authenticate_user, create_access_token, register_user, get_current_user, users_exist
 from data.user_model import UserIn, Token, LoginRequest
 
 router = APIRouter()
@@ -31,3 +31,12 @@ async def get_current_user_info(current_user: dict = Depends(get_current_user)):
         "email": current_user["email"], 
         "message": "Token válido"
     }
+
+@router.get("/users-exist")
+async def check_if_users_exist():
+    """
+    Verifica si existe al menos un usuario en la base de datos.
+    Útil para saber si se debe mostrar la pantalla de configuración inicial.
+    """
+    exist = await users_exist()
+    return {"users_exist": exist}

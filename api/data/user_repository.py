@@ -23,5 +23,12 @@ async def get_user_by_username_or_email(username_or_email: str):
         ]
     })
 
+async def check_users_exist():
+    """
+    Verifica si existe al menos un usuario en la base de datos
+    """
+    user = await users_collection.find_one({})
+    return user is not None
+
 async def create_user(user: dict):
     await users_collection.insert_one(user)

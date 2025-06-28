@@ -3,7 +3,7 @@ from fastapi.security import OAuth2PasswordBearer, HTTPBearer, HTTPAuthorization
 from passlib.context import CryptContext
 from jose import jwt, JWTError
 from datetime import datetime, timedelta
-from data.user_repository import get_user_by_email, get_user_by_username, get_user_by_username_or_email, create_user
+from data.user_repository import get_user_by_email, get_user_by_username, get_user_by_username_or_email, create_user, check_users_exist
 from dotenv import load_dotenv
 import os
 
@@ -44,6 +44,12 @@ async def register_user(username: str, email: str, password: str):
         "email": email, 
         "hashed_password": hashed
     })
+
+async def users_exist():
+    """
+    Verifica si existe al menos un usuario en la base de datos
+    """
+    return await check_users_exist()
 
 async def authenticate_user(username_or_email: str, password: str):
     user = await get_user_by_username_or_email(username_or_email)
