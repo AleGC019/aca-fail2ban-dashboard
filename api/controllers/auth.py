@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import OAuth2PasswordRequestForm
-from services.auth import authenticate_user, create_access_token, register_user
+from services.auth import authenticate_user, create_access_token, register_user, get_current_user
 from data.user_model import UserIn, Token
 
 router = APIRouter()
@@ -20,3 +20,10 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     token = create_access_token({"sub": user["email"]})
     return {"access_token": token, "token_type": "bearer"}
+
+@router.get("/whoami")
+async def get_current_user_info(current_user: dict = Depends(get_current_user)):
+    """
+    Endpoint para obtener información del usuario autenticado
+    """
+    return {"email": current_user["email"], "message": "Token válido"}

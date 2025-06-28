@@ -579,6 +579,23 @@ async def get_fail2ban_stats(current_user: dict = Depends(get_current_user)):
 async def health():
     return {"status": "ok", "message": "API de Logs y Gestión de Fail2ban funcionando"}
 
+@router.get("/protected-stats", summary="Estadísticas protegidas con autenticación")
+async def get_protected_stats(current_user: dict = Depends(get_current_user)):
+    """
+    Endpoint protegido que requiere autenticación JWT.
+    Demuestra cómo usar el token Bearer en Swagger.
+    """
+    return {
+        "message": f"Hola {current_user['email']}, tienes acceso a las estadísticas protegidas",
+        "user_email": current_user["email"],
+        "timestamp": datetime.now().isoformat(),
+        "protected_data": {
+            "admin_level": True,
+            "can_modify_jails": True,
+            "last_login": datetime.now().isoformat()
+        }
+    }
+
 # ruta extra de prueba para lo de las ips baneadas
 @router.get("/fail2ban/banned-ips-testing")
 async def banned_ips(jail: str = "sshd", hours: int = 24):
