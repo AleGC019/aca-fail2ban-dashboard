@@ -14,18 +14,7 @@ async def register(user: UserIn):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/login", response_model=Token)
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    user = await authenticate_user(form_data.username, form_data.password)
-    if not user:
-        raise HTTPException(status_code=401, detail="Credenciales inválidas")
-    token = create_access_token({"sub": user["email"]})
-    return {"access_token": token, "token_type": "bearer"}
-
-@router.post("/login-custom", response_model=Token)
 async def login_custom(login_data: LoginRequest):
-    """
-    Login alternativo que acepta JSON con username_or_email y password
-    """
     user = await authenticate_user(login_data.username_or_email, login_data.password)
     if not user:
         raise HTTPException(status_code=401, detail="Credenciales inválidas")
