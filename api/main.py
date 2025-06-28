@@ -5,7 +5,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles  # Para servir CSS, JS, imágenes
 from fastapi.templating import Jinja2Templates  # Para renderizar HTML
 from fastapi.responses import HTMLResponse  # Para el tipo de respuesta
-from fastapi.security import HTTPBearer
 
 # Tus importaciones existentes
 from controllers import logs, jails, auth

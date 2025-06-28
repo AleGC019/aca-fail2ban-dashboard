@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.security import OAuth2PasswordRequestForm
 from services.auth import authenticate_user, create_access_token, register_user, get_current_user, users_exist
 from data.user_model import UserIn, Token, LoginRequest
 
