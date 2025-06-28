@@ -580,10 +580,10 @@ async def health():
     return {"status": "ok", "message": "API de Logs y Gestión de Fail2ban funcionando"}
 
 # ruta extra de prueba para lo de las ips baneadas
-@router.get("/fail2ban/banned-ips-testing")
-async def banned_ips(jail: str = "sshd", hours: int = 24):
-    try:
-        entries = get_banned_ips_with_details(jail, hours=hours)
-        return {"values": entries}
-    except HTTPException as e:
-        return {"error": e.detail}
+#@router.get("/fail2ban/banned-ips-testing")
+#async def banned_ips(jail: str = "sshd", hours: int = 24):
+#    try:
+#        entries = get_banned_ips_with_details(jail, hours=hours)
+#        return {"values": entries}
+#    except HTTPException as e:
+#        return {"error": e.detail}
