@@ -194,7 +194,8 @@ def get_banned_ips_with_details(jail: str, hours: int = 24) -> List[Dict]:
         return []
 
     # Obtener la ruta del archivo de log
-    log_file = get_fail2ban_log_path()
+    #log_file = get_fail2ban_log_path()
+    log_file = "/var/log/fail2ban.log"
     if not os.path.exists(log_file):
         raise HTTPException(status_code=500, detail=f"Archivo de log {log_file} no encontrado")
 
