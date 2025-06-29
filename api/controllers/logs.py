@@ -4,7 +4,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPExcept
 from httpx import AsyncClient, RequestError, HTTPStatusError
 # --- CAMBIO AQUÍ ---
 # Se importa LOKI_QUERY_URL directamente, no 'settings'
-from services.fail2ban import get_currently_banned_ips, jail_exists, get_banned_ips_with_details
+from services.fail2ban import get_currently_banned_ips, jail_exists, get_banned_ips_with_details, get_banned_ips_with_details_improved
 from configuration.settings import settings
 # -------------------
 import asyncio
@@ -598,9 +598,109 @@ async def get_protected_stats(current_user: dict = Depends(get_current_user)):
 
 # ruta extra de prueba para lo de las ips baneadas
 @router.get("/fail2ban/banned-ips-testing")
-async def banned_ips(jail: str = "sshd", hours: int = 24):
+async def banned_ips(
+    page: int = Query(0, ge=0, description="Número de página"),
+    size: int = Query(10, ge=1, le=100, description="Tamaño de página"),
+    jail: str = Query("sshd", description="Nombre del jail de Fail2ban"),
+    hours: int = Query(24, ge=1, le=168, description="Rango de tiempo en horas hacia atrás"),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Endpoint mejorado para obtener IPs baneadas con información detallada.
+    Utiliza comandos directos de fail2ban-client y análisis de logs.
+    """
     try:
-        entries = get_banned_ips_with_details(jail, hours=hours)
-        return {"values": entries}
+        entries = get_banned_ips_with_details_improved(jail)
+        
+        if not entries:
+            return {
+                "totalCount": 0,
+                "totalPages": 1,
+                "hasNextPage": False,
+                "hasPreviousPage": False,
+                "currentPage": page,
+                "values": []
+            }
+        
+        # Paginación
+        total_count = len(entries)
+        start_idx = page * size
+        end_idx = start_idx + size
+        paginated_entries = entries[start_idx:end_idx]
+        total_pages = math.ceil(total_count / size) if total_count > 0 else 1
+        
+        return {
+            "totalCount": total_count,
+            "totalPages": total_pages,
+            "hasNextPage": end_idx < total_count,
+            "hasPreviousPage": start_idx > 0,
+            "currentPage": page,
+            "values": paginated_entries
+        }
+        
     except HTTPException as e:
-        return {"error": e.detail}
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error interno: {str(e)}")
+
+@router.get("/fail2ban/banned-ips-simple")
+async def banned_ips_simple(
+    page: int = Query(0, ge=0, description="Número de página"),
+    size: int = Query(10, ge=1, le=100, description="Tamaño de página"),
+    jail: str = Query("sshd", description="Nombre del jail de Fail2ban"),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Endpoint simplificado que obtiene solo las IPs baneadas con información básica.
+    """
+    try:
+        # Verificar si el jail existe
+        if not jail_exists(jail):
+            raise HTTPException(status_code=400, detail=f"El jail {jail} no existe.")
+        
+        # Obtener IPs baneadas
+        banned_ips = get_currently_banned_ips(jail)
+        
+        if not banned_ips:
+            return {
+                "totalCount": 0,
+                "totalPages": 1,
+                "hasNextPage": False,
+                "hasPreviousPage": False,
+                "currentPage": page,
+                "values": []
+            }
+        
+        # Crear respuesta con información básica
+        entries = []
+        current_time = datetime.now()
+        
+        for ip in banned_ips:
+            entries.append({
+                "ip": ip,
+                "jail": jail,
+                "ban_time": current_time.strftime('%Y-%m-%d %H:%M:%S'),
+                "failed_attempts": 1,  # Valor por defecto
+                "raw_log": f"IP actualmente baneada en jail {jail} (obtenido via fail2ban-client)"
+            })
+        
+        # Paginación
+        total_count = len(entries)
+        start_idx = page * size
+        end_idx = start_idx + size
+        paginated_entries = entries[start_idx:end_idx]
+        total_pages = math.ceil(total_count / size) if total_count > 0 else 1
+        
+        return {
+            "totalCount": total_count,
+            "totalPages": total_pages,
+            "hasNextPage": end_idx < total_count,
+            "hasPreviousPage": start_idx > 0,
+            "currentPage": page,
+            "values": paginated_entries
+        }
+        
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error obteniendo IPs baneadas: {str(e)}")
