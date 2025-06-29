@@ -2,7 +2,7 @@ import ipaddress
 import subprocess
 import os
 from fastapi import HTTPException
-from typing import List
+from typing import Dict, List
 import re
 from datetime import datetime, timedelta
 from dateutil import parser as date_parser
@@ -138,28 +138,54 @@ def run_fail2ban_command(command_args: List[str]) -> str:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al ejecutar Fail2ban: {str(e)}")
     
-def get_banned_ips_with_details(jail: str, log_file: str = "/var/log/fail2ban.log", hours: int = 24) -> list:
+def get_fail2ban_log_path() -> str:
     """
-    Obtiene las IPs baneadas en una jail específica junto con detalles como la hora del ban,
-    el mensaje del log y el número de intentos fallidos.
+    Obtiene la ruta del archivo de log de Fail2ban usando fail2ban-client.
+    """
+    try:
+        result = subprocess.run(
+            ["fail2ban-client", "get", "logtarget"],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        log_path = result.stdout.strip()
+        if log_path.startswith("FILE:"):
+            log_path = log_path.replace("FILE:", "").strip()
+        return log_path
+    except subprocess.CalledProcessError:
+        # Ruta por defecto si el comando falla
+        return "/var/log/fail2ban.log"
+
+def get_banned_ips_with_details(jail: str, hours: int = 24) -> List[Dict]:
+    """
+    Obtiene las IPs baneadas para una jail específica, junto con la hora del ban y el mensaje del log.
 
     Args:
-        jail (str): Nombre del jail de Fail2ban (e.g., "sshd").
-        log_file (str): Ruta al archivo de log de Fail2ban (default: "/var/log/fail2ban.log").
-        hours (int): Rango de tiempo en horas hacia atrás para buscar logs (default: 24).
+        jail (str): Nombre del jail (e.g., "sshd").
+        hours (int): Rango de tiempo en horas hacia atrás para buscar logs.
 
     Returns:
-        list: Lista de diccionarios con la información de cada IP baneada.
+        List[Dict]: Lista de diccionarios con ip, jail, ban_time, raw_log.
     """
     # Verificar si el jail existe
     try:
-        subprocess.run(["fail2ban-client", "status", jail], check=True, capture_output=True)
+        subprocess.run(
+            ["fail2ban-client", "status", jail],
+            check=True,
+            capture_output=True
+        )
     except subprocess.CalledProcessError:
         raise HTTPException(status_code=400, detail=f"El jail {jail} no existe.")
 
-    # Obtener las IPs baneadas
+    # Obtener IPs baneadas
     try:
-        banned_ips_output = subprocess.run(["fail2ban-client", "get", jail, "banned"], check=True, capture_output=True).stdout.decode()
+        banned_ips_output = subprocess.run(
+            ["fail2ban-client", "get", jail, "banned"],
+            check=True,
+            capture_output=True,
+            text=True
+        ).stdout
         banned_ips = banned_ips_output.strip().split()
     except subprocess.CalledProcessError as e:
         raise HTTPException(status_code=500, detail=f"Error al obtener IPs baneadas: {str(e)}")
@@ -167,30 +193,16 @@ def get_banned_ips_with_details(jail: str, log_file: str = "/var/log/fail2ban.lo
     if not banned_ips:
         return []
 
-    # Obtener findtime del jail
-    try:
-        findtime_output = subprocess.run(["fail2ban-client", "get", jail, "findtime"], check=True, capture_output=True).stdout.decode()
-        findtime = int(findtime_output.strip())
-    except subprocess.CalledProcessError as e:
-        raise HTTPException(status_code=500, detail=f"Error al obtener findtime: {str(e)}")
+    # Obtener la ruta del archivo de log
+    log_file = get_fail2ban_log_path()
+    if not os.path.exists(log_file):
+        raise HTTPException(status_code=500, detail=f"Archivo de log {log_file} no encontrado")
 
-    # Obtener la ruta del archivo de log del jail (e.g., /var/log/auth.log para SSH)
-    try:
-        logpath_output = subprocess.run(["fail2ban-client", "get", jail, "logpath"], check=True, capture_output=True).stdout.decode()
-        jail_log_file = logpath_output.strip()
-    except subprocess.CalledProcessError as e:
-        raise HTTPException(status_code=500, detail=f"Error al obtener logpath: {str(e)}")
-
-    # Regex para el log de baneo en /var/log/fail2ban.log
+    # Regex para el log de baneo
     ban_pattern = re.compile(
         r'^(?P<timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d{3})\s+'
         r'fail2ban\.actions\s*\[\d+\]:\s+NOTICE\s+\[(?P<jail>[^\]]+)\]\s+'
         r'Ban\s+(?P<ip>\d{1,3}(?:\.\d{1,3}){3})$'
-    )
-
-    # Regex para intentos fallidos en /var/log/auth.log (para SSH)
-    failure_pattern = re.compile(
-        r'^(?P<timestamp>\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+.*Failed password for .* from (?P<ip>\d{1,3}(?:\.\d{1,3}){3}).*$'
     )
 
     ban_entries = []
@@ -200,53 +212,41 @@ def get_banned_ips_with_details(jail: str, log_file: str = "/var/log/fail2ban.lo
         latest_log = None
         latest_time = None
 
-        # Buscar el log de baneo más reciente en /var/log/fail2ban.log
         try:
             with open(log_file, 'r') as f:
-                for line in reversed(list(f)):  # Leer desde el final para encontrar el más reciente primero
+                for line in reversed(list(f)):
                     match = ban_pattern.match(line.strip())
                     if match and match.group('ip') == ip and match.group('jail') == jail:
                         timestamp_str = match.group('timestamp')
-                        ban_time = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S,%f')
-                        if ban_time >= time_limit:
-                            if not latest_time or ban_time > latest_time:
-                                latest_time = ban_time
-                                latest_log = {
-                                    "ip": ip,
-                                    "jail": jail,
-                                    "ban_time": ban_time.strftime('%Y-%m-%d %H:%M:%S'),
-                                    "raw_log": line.strip()
-                                }
+                        try:
+                            ban_time = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S,%f')
+                            if ban_time >= time_limit:
+                                if not latest_time or ban_time > latest_time:
+                                    latest_time = ban_time
+                                    latest_log = {
+                                        "ip": ip,
+                                        "jail": jail,
+                                        "ban_time": ban_time.strftime('%Y-%m-%d %H:%M:%S'),
+                                        "raw_log": line.strip()
+                                    }
+                        except ValueError:
+                        # Handle invalid timestamp format gracefully
+                            continue
                         break
+        except FileNotFoundError:
+            raise HTTPException(status_code=500, detail=f"Archivo de log {log_file} no encontrado")
+        except PermissionError:
+            raise HTTPException(status_code=500, detail=f"Permisos insuficientes para leer {log_file}")
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error al leer el log de Fail2ban: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error al leer el log: {str(e)}")
 
         if latest_log:
-            # Calcular el período de findtime para contar intentos fallidos
-            start_time = latest_time - timedelta(seconds=findtime)
-            failed_attempts = 0
-
-            # Contar intentos fallidos en el log del jail
-            try:
-                with open(jail_log_file, 'r') as f:
-                    for line in f:
-                        match = failure_pattern.match(line.strip())
-                        if match and match.group('ip') == ip:
-                            log_time = date_parser.parse(match.group('timestamp') + f" {latest_time.year}")
-                            if start_time <= log_time <= latest_time:
-                                failed_attempts += 1
-            except Exception as e:
-                print(f"Error al leer el log del jail: {str(e)}")
-                failed_attempts = -1  # Indicador de error
-
-            latest_log["failed_attempts"] = failed_attempts
             ban_entries.append(latest_log)
         else:
             ban_entries.append({
                 "ip": ip,
                 "jail": jail,
                 "ban_time": "No disponible",
-                "failed_attempts": -1,
                 "raw_log": "No disponible"
             })
 
