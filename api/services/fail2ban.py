@@ -186,7 +186,12 @@ def get_banned_ips_with_details(jail: str, hours: int = 24) -> List[Dict]:
             capture_output=True,
             text=True
         ).stdout
-        banned_ips = banned_ips_output.strip().split()
+        
+        # Parsear el formato ['IP1', 'IP2', ...] o similar
+        # Usar regex para extraer IPs entre comillas simples
+        ip_pattern = re.compile(r"'(\d{1,3}(?:\.\d{1,3}){3})'")
+        banned_ips = ip_pattern.findall(banned_ips_output.strip())
+        
     except subprocess.CalledProcessError as e:
         raise HTTPException(status_code=500, detail=f"Error al obtener IPs baneadas: {str(e)}")
 
@@ -194,8 +199,8 @@ def get_banned_ips_with_details(jail: str, hours: int = 24) -> List[Dict]:
         return []
 
     # Obtener la ruta del archivo de log
-    #log_file = get_fail2ban_log_path()
-    log_file = "/var/log/fail2ban.log"
+    log_file = get_fail2ban_log_path()
+    #log_file = "/var/log/fail2ban.log"
     if not os.path.exists(log_file):
         raise HTTPException(status_code=500, detail=f"Archivo de log {log_file} no encontrado")
 
