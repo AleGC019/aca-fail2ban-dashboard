@@ -66,7 +66,7 @@ async def get_users_paginated_endpoint(
 @router.delete("/{user_id}")
 async def delete_user_endpoint(
     user_id: str,
-    current_user: dict = Depends(require_admin())
+    current_user: dict = Depends(require_admin)
 ):
     """
     Elimina un usuario por su ID.
@@ -96,7 +96,7 @@ async def delete_user_endpoint(
 @router.post("/{user_id}/assign-admin")
 async def assign_admin_role(
     user_id: str,
-    current_user: dict = Depends(require_admin())
+    current_user: dict = Depends(require_admin)
 ):
     """
     Asigna el rol de ADMIN a un usuario.
@@ -192,7 +192,7 @@ async def update_user_endpoint(
 
 @router.get("/admin/stats")
 async def get_user_stats(
-    current_user: dict = Depends(require_admin())
+    current_user: dict = Depends(require_admin)
 ):
     """
     Obtiene estadísticas de usuarios.

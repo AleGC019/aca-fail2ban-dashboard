@@ -124,8 +124,14 @@ def require_role(required_role: str):
         return current_user
     return role_checker
 
-def require_admin():
+async def require_admin(current_user: dict = Depends(get_current_user)):
     """
     Función específica para requerir rol de administrador
     """
-    return require_role("ADMIN")
+    user_roles = current_user.get("roles", [])
+    if "ADMIN" not in user_roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Se requiere el rol ADMIN para acceder a este recurso"
+        )
+    return current_user
