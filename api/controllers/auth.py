@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from services.auth import authenticate_user, create_access_token, register_user, get_current_user, users_exist
-from data.user_model import UserIn, Token, LoginRequest
+from data.user_model import UserIn, Token, LoginRequest, UserOut
 
 router = APIRouter()
 
@@ -18,18 +18,26 @@ async def login_custom(login_data: LoginRequest):
     if not user:
         raise HTTPException(status_code=401, detail="Credenciales inválidas")
     token = create_access_token({"sub": user["email"]})
-    return {"access_token": token, "token_type": "bearer"}
+    return Token(
+        access_token=token,
+        token_type="bearer",
+        user=UserOut(
+            id=str(user["_id"]),
+            username=user["username"],
+            email=user["email"]
+        )
+    )
 
-@router.get("/whoami")
+@router.get("/whoami", response_model=UserOut)
 async def get_current_user_info(current_user: dict = Depends(get_current_user)):
     """
     Endpoint para obtener información del usuario autenticado
     """
-    return {
-        "username": current_user["username"],
-        "email": current_user["email"], 
-        "message": "Token válido"
-    }
+    return UserOut(
+        id=str(current_user["_id"]),
+        username=current_user["username"],
+        email=current_user["email"]
+    )
 
 @router.get("/users-exist")
 async def check_if_users_exist():

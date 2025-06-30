@@ -10,6 +10,11 @@ class UserDB(BaseModel):
     email: EmailStr
     hashed_password: str
 
+class UserOut(BaseModel):
+    id: str
+    username: str
+    email: EmailStr
+
 class LoginRequest(BaseModel):
     username_or_email: str
     password: str
@@ -17,3 +22,4 @@ class LoginRequest(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    user: UserOut

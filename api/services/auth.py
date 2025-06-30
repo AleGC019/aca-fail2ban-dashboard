@@ -39,11 +39,12 @@ async def register_user(username: str, email: str, password: str):
         raise Exception("Ya existe un usuario con este nombre de usuario")
     
     hashed = hash_password(password)
-    await create_user({
+    user_data = {
         "username": username,
         "email": email, 
         "hashed_password": hashed
-    })
+    }
+    await create_user(user_data)
 
 async def users_exist():
     """

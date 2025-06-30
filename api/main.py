@@ -1,10 +1,10 @@
 import os  # Para construir rutas de directorios
 from datetime import datetime  # Para el año en el footer
-from fastapi import FastAPI, Request  # 'Request' es necesario para las plantillas
+from fastapi import FastAPI, Request, HTTPException  # 'Request' es necesario para las plantillas
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles  # Para servir CSS, JS, imágenes
 from fastapi.templating import Jinja2Templates  # Para renderizar HTML
-from fastapi.responses import HTMLResponse  # Para el tipo de respuesta
+from fastapi.responses import HTMLResponse, JSONResponse  # Para el tipo de respuesta
 
 # Tus importaciones existentes
 from controllers import logs, jails, auth
@@ -24,6 +24,14 @@ app = FastAPI(
     version="1.0.0",
     # Las rutas por defecto para /docs y /redoc ya están habilitadas
 )
+
+# --- Manejador de excepciones personalizado ---
+@app.exception_handler(HTTPException)
+async def custom_http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"message": exc.detail}
+    )
 
 # --- Configuración de CORS (la que ya tenías) ---
 app.add_middleware(
