@@ -7,7 +7,7 @@ from fastapi.templating import Jinja2Templates  # Para renderizar HTML
 from fastapi.responses import HTMLResponse, JSONResponse  # Para el tipo de respuesta
 
 # Tus importaciones existentes
-from controllers import logs, jails, auth
+from controllers import logs, jails, auth, users
 from configuration.settings import load_env_or_fail
 
 # Carga variables de entorno y valida LOKI_QUERY_URL
@@ -70,6 +70,7 @@ async def read_root(request: Request):
 # --- Tus Routers Existentes ---
 # Los incluyes como ya lo hacías.
 app.include_router(auth.router, prefix="", tags=["Endpoints de Autenticación"])
+app.include_router(users.router, prefix="/users", tags=["Gestión de Usuarios"])
 app.include_router(logs.router, prefix="", tags=["Endpoints de Logs y Sistema"])
 app.include_router(jails.router, prefix="", tags=["Endpoints de Gestión de Jails"])
 # Asegúrate de que los paths dentro de logs.router y jails.router no creen conflictos

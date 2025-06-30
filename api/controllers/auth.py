@@ -24,7 +24,8 @@ async def login_custom(login_data: LoginRequest):
         user=UserOut(
             id=str(user["_id"]),
             username=user["username"],
-            email=user["email"]
+            email=user["email"],
+            roles=user.get("roles", ["USER"])
         )
     )
 
@@ -36,7 +37,8 @@ async def get_current_user_info(current_user: dict = Depends(get_current_user)):
     return UserOut(
         id=str(current_user["_id"]),
         username=current_user["username"],
-        email=current_user["email"]
+        email=current_user["email"],
+        roles=current_user.get("roles", ["USER"])
     )
 
 @router.get("/users-exist")

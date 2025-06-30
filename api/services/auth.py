@@ -42,7 +42,8 @@ async def register_user(username: str, email: str, password: str):
     user_data = {
         "username": username,
         "email": email, 
-        "hashed_password": hashed
+        "hashed_password": hashed,
+        "roles": ["USER"]  # Rol por defecto
     }
     await create_user(user_data)
 
@@ -108,3 +109,23 @@ async def get_current_user_oauth2(token: str = Depends(oauth2_scheme)):
         raise credentials_exception
     
     return user
+
+def require_role(required_role: str):
+    """
+    Decorador para requerir un rol específico
+    """
+    def role_checker(current_user: dict = Depends(get_current_user)):
+        user_roles = current_user.get("roles", [])
+        if required_role not in user_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Se requiere el rol {required_role} para acceder a este recurso"
+            )
+        return current_user
+    return role_checker
+
+def require_admin():
+    """
+    Función específica para requerir rol de administrador
+    """
+    return require_role("ADMIN")
