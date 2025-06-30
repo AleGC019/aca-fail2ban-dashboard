@@ -580,7 +580,7 @@ async def get_filtered_logs(
             level_match = re.search(r"\b(INFO|DEBUG|WARNING|ERROR|CRITICAL|NOTICE)\b", line)
             log_level = level_match.group(1).upper() if level_match else "UNKNOWN"
 
-            event_match = re.search(r"\] (Found|Processing|Total|Ban|Unban|Started|Stopped|Banned|Unbanned)", line)
+            event_match = re.search(r"\b(Found|Processing|Total|Ban|Unban|Started|Stopped|Banned|Unbanned)\b", line)
             event_type = event_match.group(1) if event_match else "Unknown"
 
             # Filtrar por nivel de log y texto libre
