@@ -11,7 +11,7 @@ import os
 load_dotenv()
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = 10080
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")  # Para OAuth2 password flow
 bearer_scheme = HTTPBearer()  # Para Bearer token en Swagger
 secret = os.getenv("SECRET_KEY")
