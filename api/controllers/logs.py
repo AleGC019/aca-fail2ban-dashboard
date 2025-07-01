@@ -11,7 +11,10 @@ from services.fail2ban import (
     get_jail_ban_duration,
     get_ip_ban_history,
     get_jail_context_info,
-    calculate_threat_level
+    calculate_threat_level,
+    get_peak_attack_hour,
+    get_ban_info_from_logs,
+    get_ban_temporal_info
 )
 from configuration.settings import settings
 # -------------------
@@ -833,56 +836,165 @@ async def banned_ips_simple(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error obteniendo IPs baneadas: {str(e)}")
 
-# @router.get("/fail2ban/test-enhanced-features")
-# async def test_enhanced_features(
-#     ip: str = Query("192.168.1.100", description="IP de prueba"),
-#     jail: str = Query("sshd", description="Nombre del jail")
-# ):
-#     """
-#     Endpoint de prueba para verificar todas las nuevas funcionalidades de prioridad alta.
-#     TODO: Eliminar después de las pruebas.
-#     """
-#     print(f"🧪 [DEBUG] Probando funcionalidades mejoradas para IP {ip} en jail {jail}")
+@router.get("/fail2ban/banned-ips-stats")
+async def get_banned_ips_stats(
+    jail: str = Query("sshd", description="Nombre del jail de Fail2ban"),
+    hours: int = Query(24, ge=1, le=168, description="Rango de tiempo en horas para análisis histórico"),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Obtiene estadísticas completas sobre IPs baneadas utilizando las funciones disponibles de fail2ban.
     
-#     try:
-#         # Obtener duración de ban
-#         ban_duration = get_jail_ban_duration(jail)
-#         print(f"✅ [DEBUG] Ban duration: {ban_duration} segundos")
+    Incluye:
+    - Conteo actual de IPs baneadas
+    - Análisis de amenazas
+    - Información de duración de bans
+    - Estadísticas de reincidencia
+    - Información del jail
+    """
+    try:
+        # Verificar que el jail existe
+        if not jail_exists(jail):
+            raise HTTPException(status_code=400, detail=f"El jail {jail} no existe.")
         
-#         # Probar historial de IP
-#         ban_history = get_ip_ban_history(ip, jail, days_back=30)
-#         print(f"✅ [DEBUG] Ban history: {ban_history}")
+        print(f"🔍 [DEBUG] Generando estadísticas para jail {jail}")
         
-#         # Probar contexto del jail
-#         jail_context = get_jail_context_info(jail)
-#         print(f"✅ [DEBUG] Jail context: {jail_context}")
+        # 1. Obtener IPs actualmente baneadas
+        currently_banned_ips = get_currently_banned_ips(jail)
+        current_banned_count = len(currently_banned_ips)
         
-#         # Probar cálculo de nivel de amenaza
-#         threat_level = calculate_threat_level(ban_history, 3, jail_context, {})
-#         print(f"✅ [DEBUG] Threat level: {threat_level}")
+        print(f"📊 [DEBUG] IPs actualmente baneadas: {current_banned_count}")
         
-#         return {
-#             "status": "success",
-#             "test_results": {
-#                 "ip_tested": ip,
-#                 "jail_tested": jail,
-#                 "ban_duration_seconds": ban_duration,
-#                 "ban_history": ban_history,
-#                 "jail_context": jail_context,
-#                 "threat_level": threat_level
-#             },
-#             "features_tested": [
-#                 "✅ Historial básico (cuántas veces baneada antes)",
-#                 "✅ Contexto del jail (configuración y estadísticas)",
-#                 "✅ Nivel de amenaza (score basado en patrones)"
-#             ]
-#         }
+        # 2. Obtener información del jail (configuración y contexto)
+        jail_context = get_jail_context_info(jail)
+        ban_duration_seconds = get_jail_ban_duration(jail)
+        peak_attack_hour = get_peak_attack_hour(jail)
         
-#     except Exception as e:
-#         print(f"❌ [DEBUG] Error en test de funcionalidades: {str(e)}")
-#         return {
-#             "status": "error",
-#             "message": str(e),
-#             "ip_tested": ip,
-#             "jail_tested": jail
-#         }
+        # 3. Análisis detallado de cada IP baneada
+        ip_analysis = []
+        threat_levels = {"LOW": 0, "MEDIUM": 0, "HIGH": 0, "CRITICAL": 0}
+        total_failed_attempts = 0
+        repeat_offenders = 0
+        
+        for ip in currently_banned_ips:
+            # Obtener historial de la IP
+            ban_history = get_ip_ban_history(ip, jail, days_back=30)
+            
+            # Obtener información detallada del ban actual
+            ban_info = get_ban_info_from_logs(jail, ip, hours)
+            failed_attempts = ban_info.get("failed_attempts", 0)
+            total_failed_attempts += failed_attempts
+            
+            # Obtener información temporal del ban
+            temporal_info = get_ban_temporal_info(jail, ip, ban_duration_seconds)
+            
+            # Calcular nivel de amenaza
+            threat_level = calculate_threat_level(ban_history, failed_attempts, jail_context, temporal_info)
+            threat_level_name = threat_level.get("level", "LOW")
+            threat_levels[threat_level_name] += 1
+            
+            # Verificar si es reincidente
+            if ban_history.get("is_repeat_offender", False):
+                repeat_offenders += 1
+            
+            ip_analysis.append({
+                "ip": ip,
+                "threat_level": threat_level_name,
+                "threat_score": threat_level.get("score", 0),
+                "failed_attempts": failed_attempts,
+                "previous_bans": ban_history.get("previous_bans_count", 0),
+                "is_repeat_offender": ban_history.get("is_repeat_offender", False),
+                "first_seen": ban_history.get("first_seen", "Desconocido"),
+                "ban_time": ban_info.get("ban_time", "Desconocido"),
+                "estimated_unban_time": temporal_info.get("estimated_unban_time", "Desconocido"),
+                "time_remaining": temporal_info.get("time_remaining_formatted", "Desconocido")
+            })
+        
+        # 4. Calcular estadísticas agregadas
+        avg_failed_attempts = total_failed_attempts / current_banned_count if current_banned_count > 0 else 0
+        repeat_offender_rate = (repeat_offenders / current_banned_count * 100) if current_banned_count > 0 else 0
+        
+        # 5. Formatear duración de ban
+        ban_duration_minutes = ban_duration_seconds // 60
+        ban_duration_formatted = f"{ban_duration_minutes} minutos"
+        if ban_duration_minutes >= 60:
+            ban_duration_hours = ban_duration_minutes // 60
+            remaining_minutes = ban_duration_minutes % 60
+            ban_duration_formatted = f"{ban_duration_hours}h {remaining_minutes}m"
+        
+        # 6. TOP 5 IPs más peligrosas (por threat score)
+        top_threat_ips = sorted(ip_analysis, key=lambda x: x["threat_score"], reverse=True)[:5]
+        
+        # 7. Ordenar análisis por nivel de amenaza para respuesta completa
+        ip_analysis.sort(key=lambda x: (
+            ["LOW", "MEDIUM", "HIGH", "CRITICAL"].index(x["threat_level"]),
+            -x["threat_score"]
+        ), reverse=True)
+        
+        # 8. Construir respuesta completa
+        stats = {
+            # Estadísticas generales
+            "summary": {
+                "jail_name": jail,
+                "total_banned_ips": current_banned_count,
+                "ban_duration": ban_duration_formatted,
+                "ban_duration_seconds": ban_duration_seconds,
+                "peak_attack_hour": peak_attack_hour,
+                "analysis_period_hours": hours
+            },
+            
+            # Estadísticas de actividad
+            "activity_stats": {
+                "total_failed_attempts": total_failed_attempts,
+                "avg_failed_attempts_per_ip": round(avg_failed_attempts, 2),
+                "repeat_offenders_count": repeat_offenders,
+                "repeat_offender_rate_percent": round(repeat_offender_rate, 2)
+            },
+            
+            # Distribución por nivel de amenaza
+            "threat_distribution": {
+                "critical": threat_levels["CRITICAL"],
+                "high": threat_levels["HIGH"], 
+                "medium": threat_levels["MEDIUM"],
+                "low": threat_levels["LOW"]
+            },
+            
+            # Información del jail
+            "jail_info": {
+                "service_type": jail_context.get("service_type", "Desconocido"),
+                "common_attack_patterns": jail_context.get("common_attack_patterns", []),
+                "protection_level": jail_context.get("protection_level", "Estándar"),
+                "max_retry": jail_context.get("max_retry", "Desconocido"),
+                "find_time": jail_context.get("find_time", "Desconocido")
+            },
+            
+            # TOP amenazas
+            "top_threats": [
+                {
+                    "ip": ip_data["ip"],
+                    "threat_level": ip_data["threat_level"],
+                    "threat_score": ip_data["threat_score"],
+                    "failed_attempts": ip_data["failed_attempts"],
+                    "previous_bans": ip_data["previous_bans"],
+                    "time_remaining": ip_data["time_remaining"]
+                }
+                for ip_data in top_threat_ips
+            ],
+            
+            # Análisis completo de todas las IPs (opcional, puede ser grande)
+            "detailed_analysis": ip_analysis
+        }
+        
+        print(f"✅ [DEBUG] Estadísticas generadas exitosamente para {current_banned_count} IPs")
+        
+        return stats
+        
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        print(f"❌ [DEBUG] Error generando estadísticas: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error al generar estadísticas de IPs baneadas: {str(e)}"
+        )
+
