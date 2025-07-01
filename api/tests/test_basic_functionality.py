@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import patch, MagicMock
 import sys
 import os
 
@@ -13,11 +13,6 @@ class TestBasicFunctions:
         """Test de importaciones básicas"""
         # Test de importaciones sin dependencias problemáticas
         try:
-            import os
-            import sys
-            import subprocess
-            import re
-            import json
             assert True
         except ImportError as e:
             pytest.fail(f"No se pudieron importar módulos básicos: {e}")

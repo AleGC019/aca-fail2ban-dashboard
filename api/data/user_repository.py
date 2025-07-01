@@ -1,6 +1,5 @@
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
-from typing import List, Optional
 import os
 import math
 

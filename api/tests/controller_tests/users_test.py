@@ -1,7 +1,6 @@
-import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
+
+from unittest.mock import patch, AsyncMock
 from fastapi.testclient import TestClient
-from fastapi import HTTPException
 import sys
 import os
 

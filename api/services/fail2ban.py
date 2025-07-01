@@ -5,7 +5,6 @@ from fastapi import HTTPException
 from typing import Dict, List
 import re
 from datetime import datetime, timedelta
-from dateutil import parser as date_parser
 
 def is_valid_ip(ip: str) -> bool:
     """Valida si la cadena es una dirección IP válida (IPv4 o IPv6)."""
@@ -562,11 +561,9 @@ def get_ban_temporal_info(jail: str, ip: str, ban_duration_seconds: int) -> dict
             if not ban_start_time:
                 # Fallback: usar tiempo actual menos una estimación
                 ban_start_time = datetime.now() - timedelta(minutes=2)
-                print(f"⚠️ [DEBUG] No se pudo parsear tiempo de ban, usando fallback")
         else:
             # Fallback si el comando falla
             ban_start_time = datetime.now() - timedelta(minutes=2)
-            print(f"⚠️ [DEBUG] Error obteniendo tiempo de ban: {process.stderr}")
         
         # Calcular tiempos
         now = datetime.now()
@@ -822,8 +819,6 @@ def calculate_threat_level(ban_history: dict, failed_attempts: int, jail_context
         dict: Nivel de amenaza y recomendaciones
     """
     try:
-        # TODO: Eliminar prints de debug después de las pruebas
-        print(f"⚠️ [DEBUG] Calculando nivel de amenaza")
         
         score = 0
         reasons = []

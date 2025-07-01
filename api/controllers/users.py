@@ -8,7 +8,7 @@ from data.user_repository import (
     add_role_to_user,
     update_user
 )
-from data.user_model import UserOut, PaginatedUsers, AssignAdminRequest, UserUpdate
+from data.user_model import UserOut, PaginatedUsers, UserUpdate
 
 router = APIRouter()
 

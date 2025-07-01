@@ -1,11 +1,8 @@
-import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
+
+from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
-from fastapi import HTTPException
 import sys
 import os
-import json
-from datetime import datetime
 
 # Agregar el directorio api al path para las importaciones
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))

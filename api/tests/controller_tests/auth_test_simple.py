@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import patch
 import sys
 import os
 
@@ -16,7 +16,7 @@ class TestAuthControllerSimple:
             
             # Simular función de hash
             import hashlib
-            result = hashlib.sha256("password".encode()).hexdigest()
+            #result = hashlib.sha256("password".encode()).hexdigest()
             
             assert mock_hash.called
             mock_hash.assert_called_with("password".encode())
@@ -94,7 +94,6 @@ class TestAuthControllerSimple:
             import hashlib
             import jwt
             import datetime
-            import os
             
             # Verificar que las librerías básicas funcionan
             assert hasattr(hashlib, 'sha256')

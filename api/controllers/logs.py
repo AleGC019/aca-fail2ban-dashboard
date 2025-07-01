@@ -17,7 +17,7 @@ import asyncio
 import time
 import re
 from typing import Optional  # Añadido Optional para claridad si se usa
-from datetime import datetime, timedelta
+from datetime import datetime
 import math
 import websockets
 from urllib.parse import urlencode
@@ -480,9 +480,6 @@ async def get_banned_ips(
     end_idx = start_idx + size
     paginated_entries = ban_entries[start_idx:end_idx]
     total_pages = math.ceil(total_count / size) if total_count > 0 else 1
-
-    print(f"[DEBUG] Resultado final: {total_count} entradas, página {page}, {len(paginated_entries)} en esta página")
-    print(f"[DEBUG] get_banned_ips completado exitosamente")
 
     return {
         # Información de paginación

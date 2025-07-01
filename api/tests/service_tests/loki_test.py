@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import patch, MagicMock
 from fastapi import HTTPException
 import httpx
 import sys
