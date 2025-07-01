@@ -8,7 +8,7 @@
 #motor==3.7.1
 #passlib[bcrypt]==1.7.4
 #python-jose[cryptography]==3.5.0
-python-dateutil==2.8.2
+#python-dateutil==2.8.2
 
 #For testing
 #pytest==8.3.5
@@ -16,18 +16,25 @@ python-dateutil==2.8.2
 #coverage==7.6.9
 #pytest-cov==6.0.0
 
-fastapi==0.103.2
-pydantic==1.10.12
-uvicorn[standard]==0.24.0
-python-multipart==0.0.6
+# FastAPI y dependencias principales - versiones compatibles con Python 3.13
+fastapi==0.110.0
+pydantic==2.6.1
+uvicorn[standard]==0.27.1
+python-multipart==0.0.7
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
-pymongo==4.6.0
+pymongo==4.6.1
 motor==3.3.2
-python-dotenv==1.0.0
-httpx==0.25.2
+python-dotenv==1.0.1
+httpx==0.26.0
+python-dateutil==2.8.2
 
-# Dependencies para tests
-pytest==7.4.3
-pytest-asyncio==0.21.1
+# Dependencies para tests - compatibles con Python 3.13
+pytest==8.0.2
+pytest-asyncio==0.23.5
 pytest-cov==4.1.0
+coverage==7.4.1
+
+# Dependencias adicionales para estabilidad
+typing-extensions==4.9.0
+anyio==4.2.0

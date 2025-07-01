@@ -15,7 +15,7 @@ class TestAuthControllerMocks:
             mock_hash.return_value.hexdigest.return_value = "hashed_password"
             
             # Simular función de hash
-            import hashlib
+            #import hashlib
             #result = hashlib.sha256("password".encode()).hexdigest()
             
             assert mock_hash.called

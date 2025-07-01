@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import List
 from services.auth import get_current_user, require_admin
 from data.user_repository import (
     get_user_by_id, 
