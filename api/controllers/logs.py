@@ -854,19 +854,7 @@ async def get_banned_ips_stats(
             remaining_minutes = ban_duration_minutes % 60
             ban_duration_formatted = f"{ban_duration_hours}h {remaining_minutes}m"
         
-        # 4. Crear análisis básico de IPs (sin funciones complejas que no funcionan)
-        ip_analysis = []
-        for ip in currently_banned_ips:
-            # Solo información básica que podemos obtener
-            ip_analysis.append({
-                "ip": ip,
-                "jail": jail,
-                "status": "banned",
-                "ban_time": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                "estimated_unban_time": (datetime.now() + timedelta(seconds=ban_duration_seconds)).strftime('%Y-%m-%d %H:%M:%S')
-            })
-        
-        # 5. Construir respuesta simplificada con solo datos reales
+        # 4. Construir respuesta simplificada con solo datos reales
         stats = {
             # Estadísticas básicas reales
             "summary": {
@@ -879,9 +867,6 @@ async def get_banned_ips_stats(
             
             # Lista de IPs baneadas
             "banned_ips_list": currently_banned_ips,
-            
-            # Análisis básico de cada IP
-            "ip_details": ip_analysis,
             
             # Estado del jail
             "jail_status": {
