@@ -134,10 +134,22 @@ jobs:
       run: |
         pytest tests/controller_tests/auth_flow_test.py -v
 
+    - name: Run all controller tests with authentication
+      working-directory: ./api
+      run: |
+        pytest tests/controller_tests/users_test.py -v
+        pytest tests/controller_tests/jails_test.py -v  
+        pytest tests/controller_tests/logs_test.py -v
+
+    - name: Run service tests
+      working-directory: ./api
+      run: |
+        pytest tests/service_tests/ -v
+
     - name: Run all tests with coverage
       working-directory: ./api
       run: |
-        pytest tests/ --cov=controllers --cov=services --cov-report=xml -v || true
+        pytest tests/ --cov=controllers --cov=services --cov-report=xml -v
 
     - name: Stop API server
       working-directory: ./api
@@ -145,104 +157,7 @@ jobs:
         if [ -f api.pid ]; then
           kill $(cat api.pid) || true
         fi
-        echo "MONGODB_URI=mongodb://admin:password@localhost:27017/test_db?authSource=admin" >> $GITHUB_ENV
-        echo "ACCESS_TOKEN_EXPIRE_MINUTES=30" >> $GITHUB_ENV
-    
-    - name: Create admin user for testing
-      run: |
-        cd api
-        python -c "
-        import asyncio
-        import sys
-        import os
-        sys.path.insert(0, '.')
-        
-        async def create_admin():
-            try:
-                from data.user_repository import UserRepository
-                from services.auth import hash_password
-                
-                repo = UserRepository()
-                hashed_pwd = hash_password('password')
-                
-                admin_user = {
-                    'username': 'admin',
-                    'email': 'admin@example.com', 
-                    'password': hashed_pwd,
-                    'roles': ['ADMIN']
-                }
-                
-                # Verificar si el admin ya existe
-                existing = await repo.find_by_username('admin')
-                if not existing:
-                    await repo.create_user(admin_user)
-                    print('✅ Admin user created')
-                else:
-                    print('✅ Admin user already exists')
-                    
-            except Exception as e:
-                print(f'⚠️  Could not create admin user: {e}')
-                print('Tests will use mocked authentication')
-        
-        asyncio.run(create_admin())
-        "
-    
-    - name: Start API server in background
-      run: |
-        cd api
-        python -c "
-        import uvicorn
-        import threading
-        import time
-        
-        def run_server():
-            try:
-                import main
-                uvicorn.run(main.app, host='127.0.0.1', port=8000, log_level='error')
-            except Exception as e:
-                print(f'Server error: {e}')
-        
-        # Start server in background thread
-        server_thread = threading.Thread(target=run_server, daemon=True)
-        server_thread.start()
-        time.sleep(3)  # Wait for server to start
-        print('✅ API server started')
-        " &
-        
-        # Wait a moment for server to fully start
-        sleep 5
-    
-    - name: Test API connectivity
-      run: |
-        curl -f http://localhost:8000/docs || echo "⚠️ API not responding, tests will use mocks"
-    
-    - name: Run tests without authentication
-      run: |
-        cd api
-        pytest tests/test_basic_functionality.py -v
-    
-    - name: Run authentication mock tests
-      run: |
-        cd api
-        pytest tests/controller_tests/auth_mock_test.py -v
-        pytest tests/controller_tests/auth_integration_test.py -v
-    
-    - name: Run authenticated controller tests
-      run: |
-        cd api
-        # Intentar tests con autenticación real, si fallan usar mocks
-        pytest tests/controller_tests/ -v -k "not (jails_test or logs_test or users_test)" || echo "⚠️ Some authenticated tests failed, continuing with available tests"
-    
-    - name: Run service tests with mocks
-      run: |
-        cd api
-        pytest tests/service_tests/ -v -k "not (fail2ban_test or loki_test)" || echo "⚠️ Some service tests failed, this is expected due to external dependencies"
-    
-    - name: Generate coverage report
-      run: |
-        cd api
-        pytest tests/test_basic_functionality.py tests/controller_tests/auth_mock_test.py tests/controller_tests/auth_integration_test.py --cov=controllers --cov=services --cov-report=xml --cov-report=term
-    
+
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
       with:

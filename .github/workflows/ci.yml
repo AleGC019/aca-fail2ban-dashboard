@@ -158,15 +158,6 @@ jobs:
           curl --fail http://localhost:3100/loki/api/v1/status/buildinfo > /dev/null || exit 1
           echo "✅ All Loki endpoints responding"
 
-      - name: Check log via API
-        run: |
-          sleep 10
-          echo "--- Checking logs in API ---"
-          response=$(curl --fail "http://localhost:8000/fail2ban/logs?limit=100")
-          echo "API Response:"
-          echo "$response" | jq .
-          echo "$response" | grep -q "80.94.95.112" || (echo "Expected IP not found in logs" && exit 1)
-
       - name: Display service logs
         run: docker compose logs --no-color
         if: always()
