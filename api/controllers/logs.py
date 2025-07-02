@@ -511,7 +511,7 @@ async def get_filtered_logs(
         end: Optional[int] = Query(None, description="Fin del rango de tiempo (timestamp UNIX en segundos)."),
         service: Optional[str] = Query(None, description="Filtrar por etiqueta 'job' (e.g., 'fail2ban')."),
         level: Optional[str] = Query(None, description="Filtrar por nivel de log usando tag 'level'."),
-        event: Optional[str] = Query(None, description="Filtrar por tipo de evento usando tag 'event' (e.g., 'Ban', 'Unban', 'Found')."),
+        event: Optional[str] = Query(None, description="Filtrar por tipo de evento (e.g., 'Ban', 'Unban', 'Found') - se aplica sobre resultados parseados."),
         filter_text: Optional[str] = Query(None, description="Texto libre a buscar en el mensaje del log."),
         current_user: dict = Depends(get_current_user)
 ):
@@ -529,8 +529,6 @@ async def get_filtered_logs(
         query_filters[0] = f'job="{service}"'  # Reemplazar el filtro de job
     if level:
         query_filters.append(f'level="{level}"')  # Usar tag level directamente
-    if event:
-        query_filters.append(f'event="{event}"')  # Usar tag event directamente
     
     # Construir la query base con los filtros de tags
     logql_query = '{' + ', '.join(query_filters) + '}'
@@ -565,13 +563,11 @@ async def get_filtered_logs(
             timestamp = datetime.fromtimestamp(int(ts) / 1_000_000_000)
             readable_date = timestamp.strftime("%Y-%m-%d %H:%M:%S")
 
-            # Obtener level directamente de los tags de Loki, pero event_type con regex
+            # Obtener level y pid directamente de los tags de Loki
             log_level = stream_labels.get("level", "UNKNOWN").upper()
-            
-            # Extraer información del mensaje usando regex (como estaba antes)
-            pid_match = re.search(r"\[(\d+)]", line)
-            pid = pid_match.group(1) if pid_match else None
+            pid = stream_labels.get("pid", None)  # Obtener pid de los tags de Loki
 
+            # Extraer información del mensaje usando regex
             ip_match = re.search(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", line)
             ip = ip_match.group(0) if ip_match else None
 
@@ -616,6 +612,10 @@ async def get_filtered_logs(
                 "importance": importance,
                 "message": line.strip()
             })
+
+    # Si se proporciona filtro de evento, aplicarlo sobre los resultados parseados
+    if event:
+        all_values = [log for log in all_values if log["eventType"] == event]
 
     all_values.sort(key=lambda x: x["timestamp"], reverse=True)
 
