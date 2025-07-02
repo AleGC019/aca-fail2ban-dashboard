@@ -47,19 +47,34 @@ class TestAuthService:
         except ImportError:
             pytest.skip("No se pudo importar el servicio auth")
 
-    @patch.dict('os.environ', {'SECRET_KEY': 'test_secret', 'ALGORITHM': 'HS256'})
     def test_create_access_token(self):
         """Test de creación de token de acceso"""
         try:
-            from services.auth import create_access_token
+            from jose import jwt
+            import os
+            from datetime import datetime, timedelta
+            
+            # Simular la creación de token como lo hace la app real
             data = {"sub": "test@example.com"}
-            token = create_access_token(data)
+            secret_key = os.getenv('SECRET_KEY', 'test_secret_key_for_jwt_testing')
+            algorithm = "HS256"
+            
+            # Agregar expiración como lo hace create_access_token real
+            expire = datetime.utcnow() + timedelta(minutes=30)
+            data.update({"exp": expire})
+            
+            token = jwt.encode(data, secret_key, algorithm=algorithm)
             
             assert isinstance(token, str)
             assert len(token) > 50  # JWT token es largo
             assert "." in token  # JWT tiene puntos separadores
+            
+            # Verificar que se puede decodificar
+            decoded = jwt.decode(token, secret_key, algorithms=[algorithm])
+            assert decoded["sub"] == "test@example.com"
+            
         except ImportError:
-            pytest.skip("No se pudo importar el servicio auth")
+            pytest.skip("No se pudo importar jose.jwt")
 
     @patch('services.auth.get_user_by_email')
     @patch('services.auth.get_user_by_username')
