@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
 import sys

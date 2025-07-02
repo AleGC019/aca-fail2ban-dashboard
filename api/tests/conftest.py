@@ -2,7 +2,6 @@ import pytest
 import os
 from unittest.mock import patch, MagicMock
 import httpx
-import asyncio
 
 @pytest.fixture(autouse=True)
 def setup_test_environment():
@@ -130,7 +129,7 @@ async def admin_token():
         secret_key = os.getenv('SECRET_KEY', 'test_secret_key_for_jwt_testing')
         token = jwt.encode(payload, secret_key, algorithm="HS256")
         return token
-    except:
+    except Exception:
         # Fallback final
         return "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiIsImV4cCI6OTk5OTk5OTk5OSwicm9sZXMiOlsiQURNSU4iXX0.mock_signature"
 
@@ -204,7 +203,7 @@ def sync_admin_token():
         secret_key = os.getenv('SECRET_KEY', 'test_secret_key_for_jwt_testing')
         token = jwt.encode(payload, secret_key, algorithm="HS256")
         return token
-    except:
+    except Exception:
         return "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiIsImV4cCI6OTk5OTk5OTk5OSwicm9sZXMiOlsiQURNSU4iXX0.mock_signature"
 
 @pytest.fixture

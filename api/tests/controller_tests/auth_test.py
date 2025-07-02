@@ -6,7 +6,7 @@ del controller de autenticación.
 """
 
 import pytest
-from unittest.mock import patch, AsyncMock, Mock
+from unittest.mock import patch, AsyncMock
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
 import sys
