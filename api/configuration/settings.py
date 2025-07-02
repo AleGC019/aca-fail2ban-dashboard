@@ -1,6 +1,7 @@
 import os
 from dotenv import load_dotenv
 from fastapi import APIRouter, Query
+#from pydantic_settings import BaseSettings
 from pydantic import BaseSettings
 from typing import List, Optional
 from data.models import LogEntry
