@@ -1,6 +1,8 @@
 import pytest
 import os
 from unittest.mock import patch, MagicMock
+import httpx
+import asyncio
 
 @pytest.fixture(autouse=True)
 def setup_test_environment():
@@ -88,3 +90,124 @@ def settings():
         ACCESS_TOKEN_EXPIRE_MINUTES = 30
     
     return MockSettings()
+
+@pytest.fixture
+async def admin_token():
+    """Fixture que obtiene un token de admin real para los tests"""
+    # Credenciales del admin
+    admin_credentials = {
+        "username": "admin",
+        "password": "password"
+    }
+    
+    try:
+        # Intentar obtener token real de la API
+        async with httpx.AsyncClient() as client:
+            # Asumiendo que tu API corre en localhost:8000
+            response = await client.post(
+                "http://localhost:8000/auth/login",
+                json=admin_credentials,
+                timeout=5.0
+            )
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("access_token")
+    except Exception as e:
+        print(f"Error obteniendo token real: {e}")
+        # Si falla, usar un token mock
+        pass
+    
+    # Fallback: crear un token mock que funcione con tus tests
+    # Asegúrate de que tenga la estructura correcta para tu aplicación
+    import jwt
+    payload = {
+        "sub": "admin",
+        "exp": 9999999999,  # Token que no expire
+        "roles": ["ADMIN"]
+    }
+    try:
+        # Intentar usar la misma clave secreta que tu aplicación
+        secret_key = os.getenv('SECRET_KEY', 'test_secret_key_for_jwt_testing')
+        token = jwt.encode(payload, secret_key, algorithm="HS256")
+        return token
+    except:
+        # Fallback final
+        return "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiIsImV4cCI6OTk5OTk5OTk5OSwicm9sZXMiOlsiQURNSU4iXX0.mock_signature"
+
+@pytest.fixture
+async def auth_headers(admin_token):
+    """Headers de autorización con token de admin"""
+    token = await admin_token
+    return {"Authorization": f"Bearer {token}"}
+
+@pytest.fixture
+def mock_authenticated_user():
+    """Mock de usuario autenticado para bypass de autenticación en tests"""
+    return {
+        "_id": "admin_test_id",
+        "username": "admin",
+        "email": "admin@example.com",
+        "roles": ["ADMIN"],
+        "hashed_password": "$2b$12$mock_admin_hash"
+    }
+
+@pytest.fixture
+def bypass_auth():
+    """Fixture para hacer bypass de autenticación en tests"""
+    def _bypass_auth():
+        return {
+            "_id": "admin_test_id",
+            "username": "admin",
+            "roles": ["ADMIN"]
+        }
+    return _bypass_auth
+
+@pytest.fixture
+async def ensure_admin_user():
+    """Fixture que asegura que existe un usuario admin para los tests"""
+    admin_data = {
+        "username": "admin",
+        "email": "admin@test.com", 
+        "password": "password"
+    }
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            # Intentar registrar el usuario admin
+            response = await client.post(
+                "http://localhost:8000/auth/register",
+                json=admin_data,
+                timeout=5.0
+            )
+            
+            if response.status_code in [200, 201, 409]:  # 409 si ya existe
+                print("✅ Usuario admin disponible para tests")
+                return True
+            else:
+                print(f"⚠️ No se pudo crear usuario admin: {response.status_code}")
+                return False
+                
+    except Exception as e:
+        print(f"⚠️ Error configurando usuario admin: {e}")
+        return False
+
+@pytest.fixture
+def sync_admin_token():
+    """Version síncrona del token de admin para tests que no son async"""
+    import jwt
+    payload = {
+        "sub": "admin",
+        "exp": 9999999999,  # Token que no expire
+        "roles": ["ADMIN"]
+    }
+    try:
+        secret_key = os.getenv('SECRET_KEY', 'test_secret_key_for_jwt_testing')
+        token = jwt.encode(payload, secret_key, algorithm="HS256")
+        return token
+    except:
+        return "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiIsImV4cCI6OTk5OTk5OTk5OSwicm9sZXMiOlsiQURNSU4iXX0.mock_signature"
+
+@pytest.fixture
+def sync_auth_headers(sync_admin_token):
+    """Headers de autorización síncronos para tests regulares"""
+    return {"Authorization": f"Bearer {sync_admin_token}"}

@@ -1020,3 +1020,51 @@ def get_peak_attack_hour(jail: str) -> str:
             
     except Exception:
         return "N/A"
+
+def get_jails_list() -> List[str]:
+    """
+    Obtiene la lista de jails configurados en Fail2ban.
+    
+    Returns:
+        List[str]: Lista de nombres de jails
+    """
+    try:
+        process = subprocess.run(
+            ["fail2ban-client", "status"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if process.returncode != 0:
+            print(f"Error al obtener lista de jails: {process.stderr}")
+            return []
+        
+        output = process.stdout.strip()
+        if not output:
+            return []
+        
+        # Buscar la línea que contiene "Jail list:"
+        lines = output.split('\n')
+        for line in lines:
+            if "Jail list:" in line:
+                # Extraer la lista de jails después de "Jail list:"
+                jail_part = line.split("Jail list:")[-1].strip()
+                if jail_part:
+                    # Los jails están separados por comas y espacios
+                    jails = [jail.strip() for jail in jail_part.split(',') if jail.strip()]
+                    return jails
+                else:
+                    return []
+        
+        return []
+        
+    except subprocess.TimeoutExpired:
+        print("Timeout al ejecutar fail2ban-client status")
+        return []
+    except FileNotFoundError:
+        print("fail2ban-client no encontrado")
+        return []
+    except Exception as e:
+        print(f"Excepción en get_jails_list: {str(e)}")
+        return []

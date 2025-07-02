@@ -7,14 +7,50 @@ del controller de logs, excluyendo WebSocket que se testea en test_websocket.py
 
 import pytest
 from unittest.mock import Mock, AsyncMock, patch
+from fastapi.testclient import TestClient
+from fastapi import FastAPI
+import sys
+import os
+
+# Agregar el directorio api al path para las importaciones
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 import httpx
 from fastapi import HTTPException
 
 from controllers.logs import (
     query_loki_with_retry,
-    query_loki_with_retry_banned_ips
+    query_loki_with_retry_banned_ips,
+    router
 )
+from services.auth import get_current_user
+
+
+# Fixtures comunes para autenticación
+@pytest.fixture
+def auth_user():
+    """Fixture para usuario autenticado"""
+    return {
+        "_id": "user123",
+        "username": "testuser",
+        "email": "test@example.com",
+        "roles": ["USER"]
+    }
+
+@pytest.fixture
+def client_with_auth(auth_user):
+    """Fixture para cliente de test con override de autenticación"""
+    app = FastAPI()
+    app.include_router(router)
+    
+    # Mock function para bypass de autenticación
+    def mock_get_current_user():
+        return auth_user
+    
+    # Override de dependencia
+    app.dependency_overrides[get_current_user] = mock_get_current_user
+    
+    return TestClient(app)
 
 
 class TestQueryLokiWithRetry:
@@ -250,15 +286,11 @@ class TestBannedIpsEndpoint:
 
     @pytest.mark.asyncio
     @patch('controllers.logs.jail_exists')
-    async def test_get_banned_ips_jail_not_exists(self, mock_jail_exists, mock_settings):
+    async def test_get_banned_ips_jail_not_exists(self, mock_jail_exists, mock_settings, client_with_auth):
         """Test cuando el jail no existe"""
         mock_jail_exists.return_value = False
         
-        from fastapi.testclient import TestClient
-        from main import app
-        
-        client = TestClient(app)
-        response = client.get("/fail2ban/banned-ips?jail=nonexistent")
+        response = client_with_auth.get("/fail2ban/banned-ips?jail=nonexistent")
         
         assert response.status_code == 400
         assert "El jail nonexistent no existe" in response.json()["detail"]
@@ -266,16 +298,12 @@ class TestBannedIpsEndpoint:
     @pytest.mark.asyncio
     @patch('controllers.logs.jail_exists')
     @patch('controllers.logs.get_currently_banned_ips')
-    async def test_get_banned_ips_no_banned_ips(self, mock_get_banned, mock_jail_exists, mock_settings):
+    async def test_get_banned_ips_no_banned_ips(self, mock_get_banned, mock_jail_exists, mock_settings, client_with_auth):
         """Test cuando no hay IPs baneadas"""
         mock_jail_exists.return_value = True
         mock_get_banned.return_value = []
         
-        from fastapi.testclient import TestClient
-        from main import app
-        
-        client = TestClient(app)
-        response = client.get("/fail2ban/banned-ips?jail=sshd")
+        response = client_with_auth.get("/fail2ban/banned-ips?jail=sshd")
         
         assert response.status_code == 200
         data = response.json()
@@ -285,16 +313,12 @@ class TestBannedIpsEndpoint:
     @pytest.mark.asyncio
     @patch('controllers.logs.jail_exists')
     @patch('controllers.logs.get_currently_banned_ips')
-    async def test_get_banned_ips_fail2ban_error(self, mock_get_banned, mock_jail_exists, mock_settings):
+    async def test_get_banned_ips_fail2ban_error(self, mock_get_banned, mock_jail_exists, mock_settings, client_with_auth):
         """Test cuando fail2ban devuelve error"""
         mock_jail_exists.return_value = True
         mock_get_banned.side_effect = Exception("Fail2ban service error")
         
-        from fastapi.testclient import TestClient
-        from main import app
-        
-        client = TestClient(app)
-        response = client.get("/fail2ban/banned-ips?jail=sshd")
+        response = client_with_auth.get("/fail2ban/banned-ips?jail=sshd")
         
         assert response.status_code == 400
         assert "Error al obtener IPs baneadas" in response.json()["detail"]
@@ -302,7 +326,7 @@ class TestBannedIpsEndpoint:
     @pytest.mark.asyncio
     @patch('controllers.logs.jail_exists')
     @patch('controllers.logs.get_currently_banned_ips')
-    async def test_get_banned_ips_pagination(self, mock_get_banned, mock_jail_exists, mock_settings):
+    async def test_get_banned_ips_pagination(self, mock_get_banned, mock_jail_exists, mock_settings, client_with_auth):
         """Test de paginación correcta"""
         mock_jail_exists.return_value = True
         # Generar 15 IPs para testear paginación
@@ -317,13 +341,8 @@ class TestBannedIpsEndpoint:
             with patch('controllers.logs.query_loki_with_retry') as mock_query:
                 mock_query.return_value = {"data": {"result": []}}
                 
-                from fastapi.testclient import TestClient
-                from main import app
-                
-                client = TestClient(app)
-                
                 # Primera página
-                response = client.get("/fail2ban/banned-ips?jail=sshd&page=0&size=10")
+                response = client_with_auth.get("/fail2ban/banned-ips?jail=sshd&page=0&size=10")
                 assert response.status_code == 200
                 data = response.json()
                 assert data["totalCount"] == 15
@@ -333,7 +352,7 @@ class TestBannedIpsEndpoint:
                 assert len(data["values"]) == 10
                 
                 # Segunda página
-                response = client.get("/fail2ban/banned-ips?jail=sshd&page=1&size=10")
+                response = client_with_auth.get("/fail2ban/banned-ips?jail=sshd&page=1&size=10")
                 assert response.status_code == 200
                 data = response.json()
                 assert data["hasNextPage"] is False
@@ -394,7 +413,7 @@ class TestBannedIpsEndpoint:
     @pytest.mark.asyncio
     @patch('controllers.logs.jail_exists')
     @patch('controllers.logs.get_currently_banned_ips')
-    async def test_get_banned_ips_debug(self, mock_get_banned, mock_jail_exists, mock_settings):
+    async def test_get_banned_ips_debug(self, mock_get_banned, mock_jail_exists, mock_settings, client_with_auth):
         """Test de depuración para entender el comportamiento"""
         mock_jail_exists.return_value = True
         mock_get_banned.return_value = ["192.168.1.100"]  # Solo una IP para simplificar
@@ -418,11 +437,7 @@ class TestBannedIpsEndpoint:
             with patch('controllers.logs.query_loki_with_retry') as mock_query:
                 mock_query.return_value = debug_response
                 
-                from fastapi.testclient import TestClient
-                from main import app
-                
-                client = TestClient(app)
-                response = client.get("/fail2ban/banned-ips?jail=sshd&page=0&size=10&hours=24")
+                response = client_with_auth.get("/fail2ban/banned-ips?jail=sshd&page=0&size=10&hours=24")
                 
                 print(f"Response status: {response.status_code}")
                 print(f"Response data: {response.json()}")
@@ -436,16 +451,12 @@ class TestCurrentBannedIpsEndpoint:
     @pytest.mark.asyncio
     @patch('controllers.logs.jail_exists')
     @patch('controllers.logs.get_currently_banned_ips')
-    async def test_get_current_banned_ips_success(self, mock_get_banned, mock_jail_exists):
+    async def test_get_current_banned_ips_success(self, mock_get_banned, mock_jail_exists, client_with_auth):
         """Test exitoso de IPs actualmente baneadas"""
         mock_jail_exists.return_value = True
         mock_get_banned.return_value = ["192.168.1.100", "10.0.0.50"]
         
-        from fastapi.testclient import TestClient
-        from main import app
-        
-        client = TestClient(app)
-        response = client.get("/fail2ban/current-banned-ips?jail=sshd")
+        response = client_with_auth.get("/fail2ban/current-banned-ips?jail=sshd")
         
         assert response.status_code == 200
         data = response.json()
@@ -454,15 +465,11 @@ class TestCurrentBannedIpsEndpoint:
 
     @pytest.mark.asyncio
     @patch('controllers.logs.jail_exists')
-    async def test_get_current_banned_ips_jail_not_exists(self, mock_jail_exists):
+    async def test_get_current_banned_ips_jail_not_exists(self, mock_jail_exists, client_with_auth):
         """Test cuando el jail no existe"""
         mock_jail_exists.return_value = False
         
-        from fastapi.testclient import TestClient
-        from main import app
-        
-        client = TestClient(app)
-        response = client.get("/fail2ban/current-banned-ips?jail=nonexistent")
+        response = client_with_auth.get("/fail2ban/current-banned-ips?jail=nonexistent")
         
         assert response.status_code == 400
         assert "El jail nonexistent no existe" in response.json()["detail"]
@@ -470,16 +477,12 @@ class TestCurrentBannedIpsEndpoint:
     @pytest.mark.asyncio
     @patch('controllers.logs.jail_exists')
     @patch('controllers.logs.get_currently_banned_ips')
-    async def test_get_current_banned_ips_service_error(self, mock_get_banned, mock_jail_exists):
+    async def test_get_current_banned_ips_service_error(self, mock_get_banned, mock_jail_exists, client_with_auth):
         """Test cuando el servicio fail2ban falla"""
         mock_jail_exists.return_value = True
         mock_get_banned.side_effect = Exception("Service unavailable")
         
-        from fastapi.testclient import TestClient
-        from main import app
-        
-        client = TestClient(app)
-        response = client.get("/fail2ban/current-banned-ips?jail=sshd")
+        response = client_with_auth.get("/fail2ban/current-banned-ips?jail=sshd")
         
         assert response.status_code == 400
         assert "Error al obtener IPs baneadas" in response.json()["detail"]
@@ -511,7 +514,7 @@ class TestFilteredLogsEndpoint:
         }
 
     @pytest.mark.asyncio
-    async def test_get_filtered_logs_success(self, mock_settings, sample_logs_response):
+    async def test_get_filtered_logs_success(self, mock_settings, sample_logs_response, client_with_auth):
         """Test exitoso de obtención de logs filtrados"""
         with patch('controllers.logs.AsyncClient') as mock_client_class:
             mock_client = AsyncMock()
@@ -520,11 +523,7 @@ class TestFilteredLogsEndpoint:
             mock_client.get.return_value = mock_response
             mock_client_class.return_value.__aenter__.return_value = mock_client
             
-            from fastapi.testclient import TestClient
-            from main import app
-            
-            client = TestClient(app)
-            response = client.get("/fail2ban/logs?page=0&size=10")
+            response = client_with_auth.get("/fail2ban/logs?page=0&size=10")
             
             assert response.status_code == 200
             data = response.json()
@@ -533,7 +532,7 @@ class TestFilteredLogsEndpoint:
             assert len(data["values"]) == 2
 
     @pytest.mark.asyncio
-    async def test_get_filtered_logs_with_filters(self, mock_settings, sample_logs_response):
+    async def test_get_filtered_logs_with_filters(self, mock_settings, sample_logs_response, client_with_auth):
         """Test de logs con filtros aplicados"""
         with patch('controllers.logs.AsyncClient') as mock_client_class:
             mock_client = AsyncMock()
@@ -542,35 +541,27 @@ class TestFilteredLogsEndpoint:
             mock_client.get.return_value = mock_response
             mock_client_class.return_value.__aenter__.return_value = mock_client
             
-            from fastapi.testclient import TestClient
-            from main import app
-            
-            client = TestClient(app)
-            response = client.get("/fail2ban/logs?service=fail2ban&level=NOTICE&filter_text=Ban")
+            response = client_with_auth.get("/fail2ban/logs?service=fail2ban&level=NOTICE&filter_text=Ban")
             
             assert response.status_code == 200
             # Verificar que se llamó con los filtros correctos
             mock_client.get.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_get_filtered_logs_loki_error(self, mock_settings):
+    async def test_get_filtered_logs_loki_error(self, mock_settings, client_with_auth):
         """Test cuando Loki devuelve error"""
         with patch('controllers.logs.AsyncClient') as mock_client_class:
             mock_client = AsyncMock()
             mock_client.get.side_effect = httpx.RequestError("Connection failed")
             mock_client_class.return_value.__aenter__.return_value = mock_client
             
-            from fastapi.testclient import TestClient
-            from main import app
-            
-            client = TestClient(app)
-            response = client.get("/fail2ban/logs")
+            response = client_with_auth.get("/fail2ban/logs")
             
             assert response.status_code == 503
             assert "Error al contactar Loki" in response.json()["detail"]
 
     @pytest.mark.asyncio
-    async def test_get_filtered_logs_pagination(self, mock_settings):
+    async def test_get_filtered_logs_pagination(self, mock_settings, client_with_auth):
         """Test de paginación en logs filtrados"""
         # Crear respuesta con más logs para testear paginación
         large_response = {
@@ -589,11 +580,7 @@ class TestFilteredLogsEndpoint:
             mock_client.get.return_value = mock_response
             mock_client_class.return_value.__aenter__.return_value = mock_client
             
-            from fastapi.testclient import TestClient
-            from main import app
-            
-            client = TestClient(app)
-            response = client.get("/fail2ban/logs?page=0&size=10")
+            response = client_with_auth.get("/fail2ban/logs?page=0&size=10")
             
             assert response.status_code == 200
             data = response.json()
@@ -624,16 +611,12 @@ class TestStatsEndpoint:
         ]
 
     @pytest.mark.asyncio
-    async def test_get_stats_success(self, mock_settings, sample_stats_responses):
+    async def test_get_stats_success(self, mock_settings, sample_stats_responses, client_with_auth):
         """Test exitoso de obtención de estadísticas"""
         with patch('controllers.logs.query_loki_with_retry') as mock_query:
             mock_query.side_effect = sample_stats_responses
             
-            from fastapi.testclient import TestClient
-            from main import app
-            
-            client = TestClient(app)
-            response = client.get("/fail2ban/stats")
+            response = client_with_auth.get("/fail2ban/stats")
             
             assert response.status_code == 200
             data = response.json()
@@ -649,18 +632,14 @@ class TestStatsEndpoint:
             assert data["warn_error_logs"] == 2.0
 
     @pytest.mark.asyncio
-    async def test_get_stats_empty_results(self, mock_settings):
+    async def test_get_stats_empty_results(self, mock_settings, client_with_auth):
         """Test cuando no hay resultados en las consultas"""
         empty_responses = [{"data": {"resultType": "matrix", "result": []}}] * 5
         
         with patch('controllers.logs.query_loki_with_retry') as mock_query:
             mock_query.side_effect = empty_responses
             
-            from fastapi.testclient import TestClient
-            from main import app
-            
-            client = TestClient(app)
-            response = client.get("/fail2ban/stats")
+            response = client_with_auth.get("/fail2ban/stats")
             
             assert response.status_code == 200
             data = response.json()
@@ -668,16 +647,12 @@ class TestStatsEndpoint:
             assert data["parse_rate"] == 0.0
 
     @pytest.mark.asyncio
-    async def test_get_stats_query_error(self, mock_settings):
+    async def test_get_stats_query_error(self, mock_settings, client_with_auth):
         """Test cuando hay error en las consultas"""
         with patch('controllers.logs.query_loki_with_retry') as mock_query:
             mock_query.side_effect = Exception("Loki connection failed")
             
-            from fastapi.testclient import TestClient
-            from main import app
-            
-            client = TestClient(app)
-            response = client.get("/fail2ban/stats")
+            response = client_with_auth.get("/fail2ban/stats")
             
             assert response.status_code == 200
             data = response.json()
@@ -705,38 +680,28 @@ class TestHealthEndpoint:
 class TestParameterValidation:
     """Tests para validación de parámetros en endpoints"""
 
-    def test_banned_ips_invalid_parameters(self):
+    def test_banned_ips_invalid_parameters(self, client_with_auth):
         """Test de parámetros inválidos en banned-ips"""
-        from fastapi.testclient import TestClient
-        from main import app
-        
-        client = TestClient(app)
-        
         # Página negativa
-        response = client.get("/fail2ban/banned-ips?page=-1")
+        response = client_with_auth.get("/fail2ban/banned-ips?page=-1")
         assert response.status_code == 422
         
         # Size fuera de rango
-        response = client.get("/fail2ban/banned-ips?size=200")
+        response = client_with_auth.get("/fail2ban/banned-ips?size=200")
         assert response.status_code == 422
         
         # Hours fuera de rango
-        response = client.get("/fail2ban/banned-ips?hours=200")
+        response = client_with_auth.get("/fail2ban/banned-ips?hours=200")
         assert response.status_code == 422
 
-    def test_logs_invalid_parameters(self):
+    def test_logs_invalid_parameters(self, client_with_auth):
         """Test de parámetros inválidos en logs"""
-        from fastapi.testclient import TestClient
-        from main import app
-        
-        client = TestClient(app)
-        
         # Página negativa
-        response = client.get("/fail2ban/logs?page=-1")
+        response = client_with_auth.get("/fail2ban/logs?page=-1")
         assert response.status_code == 422
         
         # Size fuera de rango
-        response = client.get("/fail2ban/logs?size=0")
+        response = client_with_auth.get("/fail2ban/logs?size=0")
         assert response.status_code == 422
 
 
