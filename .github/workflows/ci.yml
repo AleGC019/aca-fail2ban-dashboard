@@ -201,7 +201,7 @@ jobs:
         run: |
           cd api
           # Ejecutar solo tests de controllers y tests básicos, excluyendo service_tests
-          PYTHONPATH=. python -m pytest tests/controller_tests/ tests/test_basic_functionality.py tests/test_import.py -v --tb=short --cov=controllers --cov=data --cov=configuration --cov=main --cov-report=html --cov-report=term --cov-report=json --cov-fail-under=75
+          PYTHONPATH=. python -m pytest tests/controller_tests/ tests/test_basic_functionality.py tests/test_import.py -v --tb=short --cov=controllers --cov=data.models --cov=data.user_model --cov=configuration --cov=main --cov-report=html --cov-report=term --cov-report=json --cov-fail-under=75
         env:
           LOKI_QUERY_URL: http://test-loki:3100/api/v1/query_range
 
