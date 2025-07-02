@@ -106,7 +106,7 @@ async def websocket_fail2ban_logs_stream_v2(
     websocket: WebSocket,
     limit: int = Query(10, description="Líneas iniciales."),
     start: Optional[int] = Query(None, description="Timestamp UNIX en ns para inicio."),
-    current_user: dict = Depends(get_current_user)
+    #current_user: dict = Depends(get_current_user)
 ):
     await websocket.accept()
     client_host = websocket.client.host
