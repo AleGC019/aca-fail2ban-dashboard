@@ -565,16 +565,18 @@ async def get_filtered_logs(
             timestamp = datetime.fromtimestamp(int(ts) / 1_000_000_000)
             readable_date = timestamp.strftime("%Y-%m-%d %H:%M:%S")
 
-            # Obtener datos directamente de los tags de Loki
+            # Obtener level directamente de los tags de Loki, pero event_type con regex
             log_level = stream_labels.get("level", "UNKNOWN").upper()
-            event_type = stream_labels.get("event", "Unknown")
             
-            # Extraer información adicional del mensaje (solo lo que no está en tags)
+            # Extraer información del mensaje usando regex (como estaba antes)
             pid_match = re.search(r"\[(\d+)]", line)
             pid = pid_match.group(1) if pid_match else None
 
             ip_match = re.search(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", line)
             ip = ip_match.group(0) if ip_match else None
+
+            event_match = re.search(r"\b(Found|Processing|Total|Ban|Unban|Started|Stopped|Banned|Unbanned)\b", line)
+            event_type = event_match.group(1) if event_match else "Unknown"
 
             # Mapeo de importancia usando los valores directos de los tags
             level_importance_map = {
